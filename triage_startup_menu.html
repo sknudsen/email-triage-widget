@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  body {
+    font-family: system-ui, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: transparent;
+  }
+  .container {
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  h2 {
+    color: var(--text-color, #333);
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: var(--text-color-secondary, #666);
+    margin-top: 0;
+    font-size: 14px;
+  }
+  .phases {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 20px 0;
+  }
+  .phase-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #e0e0e0);
+    background: var(--bg-secondary, #f8f8f8);
+  }
+  .phase-label:hover {
+    border-color: #6366f1;
+  }
+  .phase-label input {
+    width: 18px;
+    height: 18px;
+    accent-color: #6366f1;
+  }
+  .phase-title {
+    color: var(--text-color, #333);
+    font-weight: 500;
+  }
+  .phase-desc {
+    color: var(--text-color-secondary, #888);
+    font-size: 12px;
+  }
+  .start-btn {
+    width: 100%;
+    padding: 12px;
+    background: #6366f1;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .start-btn:hover {
+    background: #4f46e5;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h2>📬 Email Triage</h2>
+  <p class="subtitle">Which phases would you like to run?</p>
+  
+  <div class="phases" id="phases">
+    <label class="phase-label">
+      <input type="checkbox" checked data-phase="deferred">
+      <div>
+        <div class="phase-title">Review deferred items</div>
+        <div class="phase-desc">Sunsama_task, Defer, Undecided, Delegate, Waiting, Do_Now, Drafts</div>
+      </div>
+    </label>
+    
+    <label class="phase-label">
+      <input type="checkbox" checked data-phase="sent">
+      <div>
+        <div class="phase-title">Sent items review</div>
+        <div class="phase-desc">Unreplied sent emails → PARA / Waiting / triage</div>
+      </div>
+    </label>
+    
+    <label class="phase-label">
+      <input type="checkbox" checked data-phase="archive">
+      <div>
+        <div class="phase-title">Review Archive folder</div>
+        <div class="phase-desc">Emails filed during the day needing proper PARA routing</div>
+      </div>
+    </label>
+    
+    <label class="phase-label">
+      <input type="checkbox" checked data-phase="inbox">
+      <div>
+        <div class="phase-title">Triage inbox</div>
+        <div class="phase-desc">Process up to 39 most recent inbox emails</div>
+      </div>
+    </label>
+  </div>
+  
+  <button class="start-btn" onclick="handleStart()">Start Triage</button>
+</div>
+
+<script>
+function handleStart() {
+  const checkboxes = document.querySelectorAll('#phases input[type=checkbox]');
+  const selected = [];
+  checkboxes.forEach(cb => {
+    if (cb.checked) selected.push(cb.dataset.phase);
+  });
+  if (typeof sendPrompt === 'function') {
+    sendPrompt(selected.length === 0 ? 'phases:none' : 'phases:' + selected.join(','));
+  } else {
+    alert('Selected phases: ' + (selected.length === 0 ? 'none' : selected.join(', ')));
+  }
+}
+</script>
+</body>
+</html>
