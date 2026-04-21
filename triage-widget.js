@@ -1,6 +1,7 @@
 /**
  * Email Triage Batch Widget
  * Standalone template for CDN hosting.
+ * Version 2
  * Usage: initTriage({ batch, total, emails, tree })
  *
  * emails: array of { id, sender, date, subject, bodyPreview?, attachment?,
