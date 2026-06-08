@@ -77,19 +77,51 @@ initTriage({
 | `reason` | string | One-line reasoning |
 | `annotation` | string \| null | Calendar/task context note |
 | `threadRef` | string \| null | "Same thread as #N" |
+| `suggestion` | object \| null | Verbatim Stage 2 `Suggestion` record (input bridge). Echoed on each decision row at submit. Omit → `null`. |
+
+#### The `suggestion` field (input bridge)
+
+The calling skill stitches each email's verbatim Stage 2 `Suggestion` record onto its
+entry as `suggestion`. The widget renders from the derived projection (`suggestedAction`,
+`suggestedPath`, `reason`, …) and echoes the full record back on submit, so the decision
+log carries Stage 2's output alongside the operator's choice. Record shape:
+
+```js
+{
+  emailId, source, action, actionConfidence, actionReasons,
+  parameterisation, parameterisationConfidence, parameterisationReasons,
+  relatedDecisions
+}
+```
 
 ### Decision output
 
-On submit, the widget calls `sendPrompt('batch:' + JSON.stringify(decisions))` where each decision object contains:
+On submit, the widget calls `sendPrompt('batch:' + JSON.stringify(decisions))`, emitting one
+row per **decided** email (untouched emails are omitted). Each row follows the S42 locked
+envelope:
 
-| Field | When present |
-|-------|-------------|
-| `id` | Always — the email ID |
-| `decision` | Always — one of: `a`, `do`, `de`, `wa`, `su`, `df`, `un`, `pa`, `ar`, `cu`, `st` |
-| `resolved` | When `decision` is `a` — the full suggested action |
-| `path` | When `decision` is `pa` — the selected PARA path |
-| `isNew` | When `pa` and a new folder was created in the widget |
-| `note` | When `df` and the user typed a follow-up note |
+```js
+{
+  emailId,            // the email ID
+  decisionKey,        // key pressed: a, do, de, wa, su, df, un, pa, ar, cu
+  timestamp,          // ISO 8601, captured when the decision was made
+  action,             // routed action; == decisionKey except for "a" (see below)
+  user_typed_params,  // operator/derived params, namespaced (see per-action table)
+  suggestion          // verbatim Stage 2 record, or null
+}
+```
+
+`st` (stop) terminates the session and writes **no row** (S40 lock).
+
+| `decisionKey` | `action` | `user_typed_params` |
+|------|------|------|
+| `a` (agree) | copied from `suggestion.action` | copy of `suggestion.parameterisation` |
+| `pa` | `pa` | `{ destination }` — selected PARA path |
+| `df` | `df` | `{ contextNote }` when a note was typed, else `{}` |
+| `do`, `de`, `wa`, `su`, `un`, `ar` | same as key | `{}` |
+
+Deferred to later sessions (not yet collected): `pa.folderState`; `wa`/`df`
+`thresholdDate`; `de` `delegationTarget`; `cu` `note`; pre-fill visual-flag UX.
 
 ### Keyboard shortcuts
 

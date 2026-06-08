@@ -6,10 +6,15 @@
  *
  * emails: array of { id, sender, date, subject, bodyPreview?, attachment?,
  *         sentNotice?, badgeLabel, badgeClass, suggestedAction,
- *         suggestedPath?, reason, annotation?, threadRef? }
+ *         suggestedPath?, reason, annotation?, threadRef?, suggestion? }
  *   - bodyPreview: first ~200 chars of email body (shown below subject)
  *   - suggestedPath: full PARA path for ALL suggestion types (shown below reason)
  *     e.g. '.PARA-work/4_Archive/0_Inbox_trash' for triage dump
+ *   - suggestion: the verbatim Stage 2 Suggestion record for this email, stitched
+ *     in by the calling skill (input bridge). Echoed back on each decision row at
+ *     submit time. Shape: { emailId, source, action, actionConfidence,
+ *     actionReasons, parameterisation, parameterisationConfidence,
+ *     parameterisationReasons, relatedDecisions }. Omit if unavailable (-> null).
  * tree: { work: { label, prefix, sections: [[{name,isNew?}]] },
  *         personal: { label, prefix, sections: [[{name,isNew?}]] } }
  */
@@ -226,14 +231,12 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
     }
 
     function selectPara(path, isNew) {
-      const d = { decision: "pa", path: path };
-      if (isNew) {
-        d.isNew = true;
+      if (isNew) { // widget-internal hint: grow the tree; not emitted in the payload
         tree[path.startsWith(".PARA-work") ? "work" : "personal"]
           .sections[parseInt($("tw-ns").value)]
           .push({ name: path.split("/").pop(), isNew: true });
       }
-      decisions[cur] = d;
+      decisions[cur] = buildDecision("pa", { destination: path });
       closeAll();
       advance();
     }
@@ -247,6 +250,30 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
       if (activePanel === id) { closeAll(); } else { closeAll(); $(id).style.display = "block"; activePanel = id; if (id === "tw-pap") buildTree(); }
     }
 
+    /* --- Decision envelope (S42 locked shape) --- */
+    // Emits { emailId, decisionKey, timestamp, action, user_typed_params, suggestion }.
+    // decisionKey = key pressed; action = same except for "a" (agree), where action and
+    // params are copied from the Stage 2 suggestion. suggestion is echoed verbatim from the
+    // input bridge (emails[cur].suggestion), or null if the calling skill passed none.
+    function buildDecision(code, params) {
+      const e = emails[cur];
+      const sug = e.suggestion || null;
+      let action = code;
+      let utp = params || {};
+      if (code === "a") { // agree: accept Stage 2 suggestion verbatim
+        action = (sug && sug.action) || e.suggestedAction || "a";
+        utp = (sug && sug.parameterisation) ? Object.assign({}, sug.parameterisation) : {};
+      }
+      return {
+        emailId: e.id,
+        decisionKey: code,
+        timestamp: new Date().toISOString(),
+        action: action,
+        user_typed_params: utp,
+        suggestion: sug,
+      };
+    }
+
     /* --- Public API (attached to window.TW) --- */
     window.TW = {
       go(delta) { const n = cur + delta; if (n >= 0 && n < emails.length) { cur = n; render(); } },
@@ -254,13 +281,8 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
       decide(code) {
         if (code === "pa") { togglePanel("tw-pap"); return; }
         if (code === "df") { togglePanel("tw-dfp"); setTimeout(() => $("tw-dfn").focus(), 50); return; }
-        const e = emails[cur], d = { decision: code };
-        if (code === "a") {
-          if (e.suggestedPath) d.resolved = e.suggestedAction + ":" + e.suggestedPath;
-          else d.resolved = e.suggestedAction;
-        }
-        decisions[cur] = d;
-        if (code === "st") { renderDots(); return; }
+        if (code === "st") { renderDots(); return; } // S40 lock: stop writes NO row
+        decisions[cur] = buildDecision(code, {});
         advance();
       },
 
@@ -274,15 +296,15 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 
       confirmDefer() {
         const note = $("tw-dfn").value.trim();
-        decisions[cur] = { decision: "df" };
-        if (note) decisions[cur].note = note;
+        decisions[cur] = buildDecision("df", note ? { contextNote: note } : {});
         $("tw-dfn").value = "";
         closeAll();
         advance();
       },
 
       submit() {
-        const out = emails.map((e, i) => ({ id: e.id, ...decisions[i] }));
+        const out = [];
+        decisions.forEach((d) => { if (d) out.push(d); }); // omit untouched emails
         sendPrompt("batch:" + JSON.stringify(out));
       },
     };
