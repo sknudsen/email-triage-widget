@@ -49,6 +49,11 @@ const emails = [
     badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
     suggestedPath: null, reason: "Not urgent", annotation: null, threadRef: null,
     suggestion: null },
+  { id: "EEE", sender: "team@x.dk", date: "Thu 05 Jun 12:00", subject: "Pending vendor reply",
+    bodyPreview: "Waiting to hear back on pricing...", attachment: null, sentNotice: null,
+    badgeLabel: "Waiting", badgeClass: "badge-wa", suggestedAction: "wa",
+    suggestedPath: null, reason: "Awaiting external reply", annotation: null, threadRef: null,
+    suggestion: makeSuggestion("EEE", "wa", { contextNote: "vendor to confirm pricing", thresholdDate: "2026-06-20" }) },
 ];
 const tree = {
   work: { label: "PARA-work", prefix: ".PARA-work", sections: [
@@ -109,7 +114,7 @@ document.querySelectorAll(".tw-dot")[0].onclick();
 
 console.log("== decide do (email idx2 via dot) ==");
 document.querySelectorAll(".tw-dot")[2].onclick();
-ok("nav to email 3 of 4", document.getElementById("tw-pos").textContent === "3 of 4");
+ok("nav to email 3 of 5", document.getElementById("tw-pos").textContent === "3 of 5");
 window.TW.decide("do");
 
 console.log("== agree on a suggestion-bearing email ==");
@@ -125,19 +130,61 @@ const cell = document.querySelector('.tw-ti[data-path]');
 cell.dispatchEvent(new window.Event("click"));
 ok("pa panel closed after select", document.getElementById("tw-pap").style.display === "none");
 
-console.log("== defer with note ==");
+console.log("== de required free-text (S46 item 6) — transient on EEE ==");
+document.querySelectorAll(".tw-dot")[4].onclick();
+window.TW.decide("de");
+ok("de panel visible", document.getElementById("tw-dep").style.display === "block");
+document.getElementById("tw-de-tgt").value = "";
+window.TW.confirmDelegate();
+ok("empty de blocks decision (panel stays open)", document.getElementById("tw-dep").style.display === "block");
+ok("de required hint shown on empty submit", document.getElementById("tw-de-hint").style.display === "block");
+ok("no decision written for EEE yet", document.querySelectorAll(".tw-dot")[4].className.indexOf("decided") === -1);
+document.getElementById("tw-de-tgt").value = "Anna (ops)";
+window.TW.confirmDelegate();
+ok("de closes after valid submit", document.getElementById("tw-dep").style.display === "none");
+
+console.log("== cu required free-text (S46 item 7) — transient on EEE ==");
+document.querySelectorAll(".tw-dot")[4].onclick(); // valid de advanced cursor off EEE; re-select
+window.TW.decide("cu");
+ok("cu panel visible", document.getElementById("tw-cup").style.display === "block");
+document.getElementById("tw-cu-note").value = "   ";
+window.TW.confirmCustom();
+ok("whitespace-only cu blocks + hint", document.getElementById("tw-cup").style.display === "block" && document.getElementById("tw-cu-hint").style.display === "block");
+document.getElementById("tw-cu-note").value = "park until reorg";
+window.TW.confirmCustom();
+ok("cu closes after valid submit", document.getElementById("tw-cup").style.display === "none");
+
+console.log("== wa pre-fill + visual flag (S46 items 5,9) — final decision for EEE ==");
+document.querySelectorAll(".tw-dot")[4].onclick(); // valid cu advanced cursor off EEE; re-select
+window.TW.decide("wa");
+ok("wa/df panel visible", document.getElementById("tw-wdp").style.display === "block");
+ok("panel title reflects wa", document.getElementById("tw-wd-title").textContent === "Waiting for");
+ok("note pre-filled from suggestion.parameterisation", document.getElementById("tw-wd-note").value === "vendor to confirm pricing");
+ok("date pre-filled from suggestion.parameterisation", document.getElementById("tw-wd-date").value === "2026-06-20");
+ok("pre-filled note carries visual flag (tw-pf)", document.getElementById("tw-wd-note").classList.contains("tw-pf"));
+ok("pre-filled note hint visible", document.getElementById("tw-wd-note-pf").style.display === "inline");
+document.getElementById("tw-wd-note").dispatchEvent(new window.Event("input"));
+ok("visual flag clears on edit", !document.getElementById("tw-wd-note").classList.contains("tw-pf"));
+ok("hint hidden after edit", document.getElementById("tw-wd-note-pf").style.display === "none");
+window.TW.confirmWaitDefer();
+ok("wa closes after confirm", document.getElementById("tw-wdp").style.display === "none");
+
+console.log("== defer with note, no pre-fill (S46 item 5) — DDD suggestion null ==");
 document.querySelectorAll(".tw-dot")[3].onclick();
 window.TW.decide("df");
-ok("defer panel visible", document.getElementById("tw-dfp").style.display === "block");
-document.getElementById("tw-dfn").value = "chase next week";
-window.TW.confirmDefer();
+ok("wa/df panel visible for df", document.getElementById("tw-wdp").style.display === "block");
+ok("panel title reflects df", document.getElementById("tw-wd-title").textContent === "Defer");
+ok("note empty (no suggestion to pre-fill)", document.getElementById("tw-wd-note").value === "");
+ok("note has no visual flag when not pre-filled", !document.getElementById("tw-wd-note").classList.contains("tw-pf"));
+document.getElementById("tw-wd-note").value = "chase next week";
+window.TW.confirmWaitDefer();
 
 console.log("== all decided, submit ==");
 ok("submit enabled", document.getElementById("tw-sub").disabled === false);
 window.TW.submit();
 ok("sendPrompt fired with batch:", !!lastPrompt && lastPrompt.startsWith("batch:"));
 const rows = JSON.parse(lastPrompt.slice("batch:".length));
-ok("4 rows emitted (all decided)", rows.length === 4, "got " + rows.length);
+ok("5 rows emitted (all decided)", rows.length === 5, "got " + rows.length);
 
 const byId = Object.fromEntries(rows.map((r) => [r.emailId, r]));
 ok("CCC decisionKey=do action=do params={}", byId.CCC.decisionKey === "do" && byId.CCC.action === "do" && Object.keys(byId.CCC.user_typed_params).length === 0);
@@ -147,7 +194,11 @@ ok("AAA agree copies suggestion.parameterisation.destination", byId.AAA.user_typ
 ok("AAA params is a copy, not same ref", byId.AAA.user_typed_params !== emails[0].suggestion.parameterisation);
 ok("BBB decisionKey=pa with destination", byId.BBB.decisionKey === "pa" && typeof byId.BBB.user_typed_params.destination === "string");
 ok("DDD decisionKey=df contextNote set", byId.DDD.decisionKey === "df" && byId.DDD.user_typed_params.contextNote === "chase next week");
+ok("DDD df has no thresholdDate key (empty field omitted)", !("thresholdDate" in byId.DDD.user_typed_params));
 ok("DDD suggestion is null (omission case)", byId.DDD.suggestion === null);
+ok("EEE final decisionKey=wa action=wa", byId.EEE.decisionKey === "wa" && byId.EEE.action === "wa");
+ok("EEE wa carries pre-filled contextNote + thresholdDate", byId.EEE.user_typed_params.contextNote === "vendor to confirm pricing" && byId.EEE.user_typed_params.thresholdDate === "2026-06-20");
+ok("EEE final overwrote transient de/cu (only wa remains)", byId.EEE.user_typed_params.delegationTarget === undefined && byId.EEE.user_typed_params.note === undefined);
 ok("every row has the 6 envelope keys + ISO timestamp", rows.every((r) =>
   ["emailId","decisionKey","timestamp","action","user_typed_params","suggestion"].every((k) => k in r) &&
   /^\d{4}-\d{2}-\d{2}T/.test(r.timestamp)));
@@ -157,7 +208,7 @@ document.querySelectorAll(".tw-dot")[0].onclick();
 window.TW.decide("st");
 window.TW.submit();
 const rows2 = JSON.parse(lastPrompt.slice("batch:".length));
-ok("st did not add/replace a row", rows2.length === 4 && rows2.find((r) => r.emailId === "AAA").decisionKey === "a");
+ok("st did not add/replace a row", rows2.length === 5 && rows2.find((r) => r.emailId === "AAA").decisionKey === "a");
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);

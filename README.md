@@ -141,11 +141,24 @@ envelope:
 |------|------|------|
 | `a` (agree) | copied from `suggestion.action` | copy of `suggestion.parameterisation` |
 | `pa` | `pa` | `{ destination }` — selected PARA path |
-| `df` | `df` | `{ contextNote }` when a note was typed, else `{}` |
-| `do`, `de`, `wa`, `su`, `un`, `ar` | same as key | `{}` |
+| `wa`, `df` | same as key | `{ contextNote?, thresholdDate? }` — two-field panel; each field omitted when blank |
+| `de` | `de` | `{ delegationTarget }` — **required** free-text |
+| `cu` | `cu` | `{ note }` — **required** free-text |
+| `do`, `su`, `un`, `ar` | same as key | `{}` |
 
-Deferred to later sessions (not yet collected): `pa.folderState`; `wa`/`df`
-`thresholdDate`; `de` `delegationTarget`; `cu` `note`; pre-fill visual-flag UX.
+#### Editable-param panels (`wa`/`df`, `de`, `cu`)
+
+`wa` and `df` share one two-field panel collecting `contextNote` and `thresholdDate`
+(both optional). When the email carries a `suggestion`, each field **pre-fills** from
+`suggestion.parameterisation.contextNote` / `.thresholdDate`; a pre-filled field shows
+a quiet visual flag (accent border + "· from suggestion" hint) that clears on first
+edit, so the operator can see at a glance which values are Stage 2's and which are
+their own. `de` (`delegationTarget`) and `cu` (`note`) open single required free-text
+panels — an empty submit **blocks** the decision (nothing written) and surfaces an
+inline "Required" hint, mirroring the new-folder panel's empty-name guard.
+
+Deferred to later sessions (not yet collected): `pa.folderState` tri-state derivation
+(audit §7 item 8).
 
 ### Keyboard shortcuts
 
@@ -154,14 +167,14 @@ Deferred to later sessions (not yet collected): `pa.folderState`; `wa`/`df`
 | `←` / `→` | Navigate between emails |
 | `a` | Agree with suggestion |
 | `do` | Do now |
-| `de` | Delegate |
-| `wa` | Waiting |
+| `de` | Delegate (opens required target panel) |
+| `wa` | Waiting (opens note + threshold-date panel) |
 | `su` | Sunsama |
-| `df` | Defer (opens note panel) |
+| `df` | Defer (opens note + threshold-date panel) |
 | `un` | Undecided |
 | `pa` | PARA folder (opens tree) |
 | `ar` | Triage dump |
-| `cu` | Custom |
+| `cu` | Custom (opens required note panel) |
 | `st` | Stop triage |
 | `i` | Toggle details panel (open/close) |
 | Arrow keys | Navigate PARA tree (when open) |

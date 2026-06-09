@@ -34,6 +34,7 @@
     const decisions = emails.map(() => null);
     let detailsOpen = false; // S40 details panel: sticky across navigation
     let activePanel = null,
+      wdAction = null, // 'wa' | 'df' — which action opened the shared wait/defer panel
       fCol = 0,
       fSec = 0,
       fIdx = 0;
@@ -121,7 +122,16 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 .tw-dv{font-size:12px;color:var(--color-text-primary);flex:1;min-width:0;word-break:break-word;white-space:pre-wrap}
 .tw-dft{margin-top:12px;border-top:.5px solid var(--color-border-tertiary);padding-top:10px;text-align:right}
 .tw-dfb{font-size:12px;padding:6px 12px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer}
-.tw-dfb:hover{background:var(--color-background-secondary)}`;
+.tw-dfb:hover{background:var(--color-background-secondary)}
+.tw-wdf{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.tw-wdl{display:flex;flex-direction:column;gap:3px}
+.tw-wdl>span{font-size:11px;color:var(--color-text-secondary)}
+.tw-wdl input{font-size:13px;padding:6px 8px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary)}
+.tw-wdl input:focus{outline:none;box-shadow:0 0 0 2px var(--color-border-info)}
+input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
+.tw-pfh{font-style:normal;font-size:10px;color:var(--color-text-info)}
+.tw-req{font-size:11px;color:var(--color-text-danger);margin-top:6px;display:none}
+.tw-pr{text-align:right;margin-top:4px}`;
     document.head.appendChild(style);
 
     /* --- Build HTML --- */
@@ -140,7 +150,15 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
   <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
   <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pg" id="tw-pgrid"></div>
     <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" placeholder="New folder name…"/><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div></div></div>
-  <div id="tw-dfp" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-dfn" placeholder="Follow-up note (optional — press Enter to skip)"/><button class="tw-cb" onclick="TW.confirmDefer()">Defer</button></div></div></div>
+  <div id="tw-wdp" style="display:none"><div class="tw-dfp">
+    <div class="tw-pt" id="tw-wd-title">Defer</div>
+    <div class="tw-wdf">
+      <label class="tw-wdl"><span>Follow-up note<em class="tw-pfh" id="tw-wd-note-pf" style="display:none"> · from suggestion</em></span><input type="text" id="tw-wd-note" placeholder="optional"/></label>
+      <label class="tw-wdl"><span>Threshold date<em class="tw-pfh" id="tw-wd-date-pf" style="display:none"> · from suggestion</em></span><input type="text" id="tw-wd-date" placeholder="YYYY-MM-DD (optional)"/></label>
+    </div>
+    <div class="tw-pr"><button class="tw-cb" onclick="TW.confirmWaitDefer()">Confirm</button></div></div></div>
+  <div id="tw-dep" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-de-tgt" placeholder="Delegate to… (required)"/><button class="tw-cb" onclick="TW.confirmDelegate()">Delegate</button></div><div class="tw-req" id="tw-de-hint">Required — enter a delegate.</div></div></div>
+  <div id="tw-cup" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-cu-note" placeholder="Custom note… (required)"/><button class="tw-cb" onclick="TW.confirmCustom()">Save</button></div><div class="tw-req" id="tw-cu-hint">Required — enter a note.</div></div></div>
   <div class="tw-sr"><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit batch</button></div>
 </div>`;
 
@@ -260,11 +278,44 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 
     /* --- Panels --- */
     function closeAll() {
-      ["tw-pap", "tw-dfp"].forEach((id) => { $(id).style.display = "none"; });
+      ["tw-pap", "tw-wdp", "tw-dep", "tw-cup"].forEach((id) => { $(id).style.display = "none"; });
+      ["tw-de-hint", "tw-cu-hint"].forEach((id) => { $(id).style.display = "none"; }); // reset required hints
       activePanel = null;
     }
     function togglePanel(id) {
       if (activePanel === id) { closeAll(); } else { closeAll(); $(id).style.display = "block"; activePanel = id; if (id === "tw-pap") buildTree(); }
+    }
+
+    /* --- Editable-param panels (S46, items 5–9) ----------------------------
+     * wa/df share one two-field panel (contextNote + thresholdDate). Both fields
+     * pre-fill from suggestion.parameterisation when present; a pre-filled field
+     * carries a quiet visual flag (tw-pf + "from suggestion" hint) that clears on
+     * first edit (item 9). de/cu open single required free-text panels — an empty
+     * submit blocks the decision and surfaces an inline hint (confirmNew pattern).
+     * All values route through buildDecision into user_typed_params. */
+    function prefillField(id, val) {
+      const el = $(id), hint = $(id + "-pf");
+      if (val !== undefined && val !== null && String(val) !== "") {
+        el.value = String(val); el.classList.add("tw-pf");
+        if (hint) hint.style.display = "inline";
+      } else {
+        el.value = ""; el.classList.remove("tw-pf");
+        if (hint) hint.style.display = "none";
+      }
+    }
+    function clearPf(id) { // operator edited a pre-filled field → it's now typed
+      $(id).classList.remove("tw-pf");
+      const hint = $(id + "-pf"); if (hint) hint.style.display = "none";
+    }
+    function openWaitDefer(code) {
+      togglePanel("tw-wdp");
+      if (activePanel !== "tw-wdp") return; // toggled closed
+      wdAction = code;
+      $("tw-wd-title").textContent = code === "wa" ? "Waiting for" : "Defer";
+      const p = (emails[cur].suggestion && emails[cur].suggestion.parameterisation) || {};
+      prefillField("tw-wd-note", p.contextNote);
+      prefillField("tw-wd-date", p.thresholdDate);
+      setTimeout(() => $("tw-wd-note").focus(), 50);
     }
 
     /* --- Decision envelope (S42 locked shape) --- */
@@ -334,7 +385,9 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 
       decide(code) {
         if (code === "pa") { togglePanel("tw-pap"); return; }
-        if (code === "df") { togglePanel("tw-dfp"); setTimeout(() => $("tw-dfn").focus(), 50); return; }
+        if (code === "df" || code === "wa") { openWaitDefer(code); return; }
+        if (code === "de") { togglePanel("tw-dep"); setTimeout(() => $("tw-de-tgt").focus(), 50); return; }
+        if (code === "cu") { togglePanel("tw-cup"); setTimeout(() => $("tw-cu-note").focus(), 50); return; }
         if (code === "st") { renderDots(); return; } // S40 lock: stop writes NO row
         decisions[cur] = buildDecision(code, {});
         advance();
@@ -348,10 +401,31 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
         selectPara(path, true);
       },
 
-      confirmDefer() {
-        const note = $("tw-dfn").value.trim();
-        decisions[cur] = buildDecision("df", note ? { contextNote: note } : {});
-        $("tw-dfn").value = "";
+      confirmWaitDefer() { // wa/df: both fields optional
+        const note = $("tw-wd-note").value.trim(), date = $("tw-wd-date").value.trim();
+        const utp = {};
+        if (note) utp.contextNote = note;
+        if (date) utp.thresholdDate = date;
+        decisions[cur] = buildDecision(wdAction || "df", utp);
+        $("tw-wd-note").value = ""; $("tw-wd-date").value = "";
+        closeAll();
+        advance();
+      },
+
+      confirmDelegate() { // de: delegationTarget required
+        const tgt = $("tw-de-tgt").value.trim();
+        if (!tgt) { $("tw-de-hint").style.display = "block"; return; }
+        decisions[cur] = buildDecision("de", { delegationTarget: tgt });
+        $("tw-de-tgt").value = "";
+        closeAll();
+        advance();
+      },
+
+      confirmCustom() { // cu: note required
+        const note = $("tw-cu-note").value.trim();
+        if (!note) { $("tw-cu-hint").style.display = "block"; return; }
+        decisions[cur] = buildDecision("cu", { note: note });
+        $("tw-cu-note").value = "";
         closeAll();
         advance();
       },
@@ -363,9 +437,14 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
       },
     };
 
-    /* --- Keyboard --- */
-    $("tw-dfn").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmDefer(); });
+    /* --- Keyboard + field wiring --- */
+    $("tw-wd-note").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmWaitDefer(); });
+    $("tw-wd-date").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmWaitDefer(); });
+    $("tw-de-tgt").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmDelegate(); });
+    $("tw-cu-note").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmCustom(); });
     $("tw-nfn").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmNew(); });
+    $("tw-wd-note").addEventListener("input", () => clearPf("tw-wd-note")); // pre-filled → typed (item 9)
+    $("tw-wd-date").addEventListener("input", () => clearPf("tw-wd-date"));
 
     document.addEventListener("keydown", function (e) {
       if (activePanel === "tw-pap") {
