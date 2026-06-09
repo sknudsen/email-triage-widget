@@ -78,6 +78,30 @@ initTriage({
 | `annotation` | string \| null | Calendar/task context note |
 | `threadRef` | string \| null | "Same thread as #N" |
 | `suggestion` | object \| null | Verbatim Stage 2 `Suggestion` record (input bridge). Echoed on each decision row at submit. Omit → `null`. |
+| `metadata` | object \| null | Stage 1 email-metadata record, rendered under the details panel's `Email metadata` section. Omit → section shows `(none)`. |
+| `stage1` | object \| null | Stage 1 per-email context record, rendered under the details panel's `Stage 1 — context` section. Omit → section shows `(none)`. |
+
+#### The details panel (`i`)
+
+Each card carries a quiet `details` affordance (top-aligned with the badge in the
+suggestion pill row). `i` toggles it, or click the affordance; the label swaps
+`details` ↔ `close`. The panel folds out between the card and the action grid (card
+and panel fuse: rounded top + square bottom on the card, square top + rounded bottom
+on the panel). It is sticky across navigation so the operator can flip through cards
+comparing each card's surface against its underlying record.
+
+The panel renders three sections — `Email metadata`, `Stage 1 — context`,
+`Stage 2 — suggestion` — from the three per-email objects above (`metadata`,
+`stage1`, `suggestion`), iterating each object's keys generically as plain
+key:value rows in declaration order. Missing/null values render as `(none)`;
+absent objects render the whole section as `(none)`. New schema fields surface
+automatically without widget changes (append-only).
+
+The panel footer has an **Open as .md file** button. The widget is sandboxed (no
+filesystem), so it emits `sendPrompt('details:' + emailId)`; the calling skill writes
+the same three sections to `<snapshot>/details/<emailId>.md` (lazy on-click,
+overwrite-always) and opens it. The on-disk file is the level-2 drill-down for
+side-by-side / archivable inspection the in-widget panel can't serve.
 
 #### The `suggestion` field (input bridge)
 
@@ -139,6 +163,7 @@ Deferred to later sessions (not yet collected): `pa.folderState`; `wa`/`df`
 | `ar` | Triage dump |
 | `cu` | Custom |
 | `st` | Stop triage |
+| `i` | Toggle details panel (open/close) |
 | Arrow keys | Navigate PARA tree (when open) |
 | `Enter` | Confirm PARA selection |
 | `Esc` | Close panel |

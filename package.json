@@ -1,0 +1,13 @@
+{
+  "name": "email-triage-widget",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Standalone email-triage batch widget for CDN hosting.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/triage-widget.smoke.js"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

@@ -32,6 +32,7 @@
     /* --- State --- */
     let cur = 0;
     const decisions = emails.map(() => null);
+    let detailsOpen = false; // S40 details panel: sticky across navigation
     let activePanel = null,
       fCol = 0,
       fSec = 0,
@@ -107,7 +108,20 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 .tw-dfr{display:flex;gap:6px;align-items:center}
 .tw-dfr input{flex:1;font-size:13px;padding:6px 8px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary)}
 .tw-dfr input:focus{outline:none;box-shadow:0 0 0 2px var(--color-border-info)}
-.tw-dfr input::placeholder{color:var(--color-text-tertiary)}`;
+.tw-dfr input::placeholder{color:var(--color-text-tertiary)}
+.tw-card.open{border-bottom:none;border-radius:var(--border-radius-lg) var(--border-radius-lg) 0 0;margin-bottom:0}
+.tw-iaff{font-size:12px;color:var(--color-text-tertiary);background:transparent;border:.5px solid transparent;border-radius:var(--border-radius-md);padding:2px 8px;margin-left:auto;cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap;flex-shrink:0}
+.tw-iaff:hover{border-color:var(--color-border-secondary);color:var(--color-text-secondary)}
+.tw-iaff .tw-ac{font-size:10px;color:var(--color-text-tertiary);font-family:var(--font-mono)}
+.tw-dp{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-top:none;border-radius:0 0 var(--border-radius-lg) var(--border-radius-lg);padding:.5rem 1.25rem 1rem;margin:0 0 .75rem}
+.tw-dsh{font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 4px;font-weight:500}
+.tw-dsh:first-child{margin-top:0}
+.tw-drow{display:flex;gap:12px;align-items:baseline;padding:2px 0}
+.tw-dk{font-size:11px;color:var(--color-text-tertiary);font-family:var(--font-mono);flex:0 0 38%;word-break:break-word}
+.tw-dv{font-size:12px;color:var(--color-text-primary);flex:1;min-width:0;word-break:break-word;white-space:pre-wrap}
+.tw-dft{margin-top:12px;border-top:.5px solid var(--color-border-tertiary);padding-top:10px;text-align:right}
+.tw-dfb{font-size:12px;padding:6px 12px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer}
+.tw-dfb:hover{background:var(--color-background-secondary)}`;
     document.head.appendChild(style);
 
     /* --- Build HTML --- */
@@ -149,20 +163,23 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
     function render() {
       closeAll();
       const e = emails[cur];
-      let h = '<div class="tw-card">';
+      let h = '<div class="tw-card' + (detailsOpen ? " open" : "") + '">';
       if (e.threadRef) h += '<div class="tw-thr">🔗 ' + e.threadRef + "</div>";
       h += '<div class="tw-mr"><span class="tw-k">From</span><span class="tw-v">' + e.sender + "</span>";
-      if (decisions[cur]) h += '<span class="tw-dtag">✓ ' + decisions[cur].decision.toUpperCase() + "</span>";
+      if (decisions[cur]) h += '<span class="tw-dtag">✓ ' + decisions[cur].decisionKey.toUpperCase() + "</span>";
       h += '</div><div class="tw-mr"><span class="tw-k">Date</span><span class="tw-v">' + e.date + "</span></div>";
       h += '<div class="tw-subj">' + e.subject + "</div>";
       if (e.bodyPreview) h += '<div class="tw-body">' + e.bodyPreview + "</div>";
       if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + e.attachment + "</span></div>";
       if (e.sentNotice) h += '<div class="tw-sent">📤 ' + e.sentNotice + "</div>";
-      h += '<hr class="tw-hr"><div style="display:flex;align-items:flex-start;gap:10px"><span class="tw-badge ' + e.badgeClass + '">' + e.badgeLabel + "</span><div>";
+      h += '<hr class="tw-hr"><div style="display:flex;align-items:flex-start;gap:10px"><span class="tw-badge ' + e.badgeClass + '">' + e.badgeLabel + '</span><div style="flex:1;min-width:0">';
       h += '<div class="tw-reason">' + e.reason + "</div>";
       if (e.suggestedPath) h += '<div class="tw-spath">→ ' + e.suggestedPath + "</div>";
       if (e.annotation) h += '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px">' + e.annotation + "</div>";
-      h += "</div></div></div>";
+      h += "</div>"; // close reason block
+      h += '<button class="tw-iaff" onclick="TW.toggleDetails()" aria-label="Toggle details">' + (detailsOpen ? "close" : "details") + '<span class="tw-ac">i</span></button>';
+      h += "</div></div>"; // close pill row + tw-card
+      if (detailsOpen) h += buildDetails(e);
       $("tw-card").innerHTML = h;
       document.querySelectorAll("button.tw-a").forEach((b) => b.classList.remove("hl"));
       const sb = $("btn-" + e.suggestedAction);
@@ -274,9 +291,46 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
       };
     }
 
+    /* --- Details panel (S40 lock) -------------------------------------------
+     * Fold-out between card and action grid. Renders three sections from three
+     * per-email objects the calling skill hands in (metadata, stage1, suggestion),
+     * iterating keys generically so new schema fields surface without code change
+     * ("plain key:value lines, declaration order, missing/null -> (none)" — S40).
+     * The same three sections back the .md drill-down; the file write lives in the
+     * calling skill (widget is sandboxed, no IO), triggered by openDetailsFile(). */
+    function escHtml(s) {
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    function fmtVal(v) {
+      if (v === null || v === undefined || v === "") return "(none)";
+      if (Array.isArray(v)) return v.length ? v.map((x) => (x && typeof x === "object") ? JSON.stringify(x) : String(x)).join(", ") : "(none)";
+      if (typeof v === "object") return Object.keys(v).length ? JSON.stringify(v) : "(none)";
+      return String(v);
+    }
+    function detailsSection(title, obj) {
+      let s = '<div class="tw-dsh">' + title + "</div>";
+      const keys = obj && typeof obj === "object" ? Object.keys(obj) : [];
+      if (!keys.length) return s + '<div class="tw-drow"><span class="tw-dv">(none)</span></div>';
+      keys.forEach((k) => {
+        s += '<div class="tw-drow"><span class="tw-dk">' + escHtml(k) + '</span><span class="tw-dv">' + escHtml(fmtVal(obj[k])) + "</span></div>";
+      });
+      return s;
+    }
+    function buildDetails(e) {
+      let s = '<div class="tw-dp">';
+      s += detailsSection("Email metadata", e.metadata);
+      s += detailsSection("Stage 1 — context", e.stage1);
+      s += detailsSection("Stage 2 — suggestion", e.suggestion);
+      s += '<div class="tw-dft"><button class="tw-dfb" onclick="TW.openDetailsFile()">Open as .md file</button></div>';
+      return s + "</div>";
+    }
+
     /* --- Public API (attached to window.TW) --- */
     window.TW = {
       go(delta) { const n = cur + delta; if (n >= 0 && n < emails.length) { cur = n; render(); } },
+
+      toggleDetails() { detailsOpen = !detailsOpen; render(); },
+      openDetailsFile() { sendPrompt("details:" + emails[cur].id); }, // skill writes <snapshot>/details/<emailId>.md
 
       decide(code) {
         if (code === "pa") { togglePanel("tw-pap"); return; }
@@ -326,6 +380,7 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
       }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
       if (e.key === "Escape" && activePanel) { closeAll(); return; }
+      if (e.key === "i") { e.preventDefault(); window.TW.toggleDetails(); return; } // S40: open/close details
       if (e.key === "ArrowLeft") { e.preventDefault(); window.TW.go(-1); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); window.TW.go(1); return; }
       const map = { a: "a", cu: "cu", st: "st", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", ar: "ar" };
