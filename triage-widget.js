@@ -15,8 +15,15 @@
  *     submit time. Shape: { emailId, source, action, actionConfidence,
  *     actionReasons, parameterisation, parameterisationConfidence,
  *     parameterisationReasons, relatedDecisions }. Omit if unavailable (-> null).
- * tree: { work: { label, prefix, sections: [[{name,isNew?}]] },
- *         personal: { label, prefix, sections: [[{name,isNew?}]] } }
+ * tree: { work: { label, prefix, sections: [[{name,isNew?,folderState?}]] },
+ *         personal: { label, prefix, sections: [[{name,isNew?,folderState?}]] } }
+ *   - folderState (per leaf, optional): the Stage 2 enum
+ *     "exists_in_outlook" | "exists_in_onedrive" | "proposed". Supplied by the
+ *     calling skill when it builds the tree from the Stage 1 snapshots, so an
+ *     override pick can re-stamp the accurate provenance. When absent on an
+ *     existing leaf the widget defaults to "exists_in_onedrive" (the tree is the
+ *     OneDrive PARA reference). A confirmNew leaf is always "proposed". The
+ *     widget never invents provenance — it reflects what the skill marked.
  */
 (function () {
   "use strict";
@@ -243,7 +250,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
               row.dataset.path = path; row.dataset.col = ci; row.dataset.sec = si; row.dataset.idx = i;
               if (path === preSel) { row.classList.add("sel"); fCol = ci; fSec = si; fIdx = i; }
               row.innerHTML = '<span class="tw-ico">📁</span>' + item.name;
-              row.addEventListener("click", () => selectPara(path, false));
+              row.addEventListener("click", () => selectPara(path, false, item.folderState));
             }
             col.appendChild(row);
           }
@@ -265,13 +272,20 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       return null;
     }
 
-    function selectPara(path, isNew) {
+    function selectPara(path, isNew, leafFolderState) {
+      // folderState re-stamps the Stage 2 enum for an override pick (item 8). A
+      // confirmNew leaf is "proposed" (operator invented it). An existing pick
+      // reflects the leaf's skill-supplied provenance, defaulting to
+      // "exists_in_onedrive" when unmarked (the tree is the OneDrive reference).
+      // The widget never invents "exists_in_outlook"; that only rides the agree
+      // path, where buildDecision copies suggestion.parameterisation verbatim.
+      const folderState = isNew ? "proposed" : (leafFolderState || "exists_in_onedrive");
       if (isNew) { // widget-internal hint: grow the tree; not emitted in the payload
         tree[path.startsWith(".PARA-work") ? "work" : "personal"]
           .sections[parseInt($("tw-ns").value)]
-          .push({ name: path.split("/").pop(), isNew: true });
+          .push({ name: path.split("/").pop(), isNew: true, folderState: "proposed" });
       }
-      decisions[cur] = buildDecision("pa", { destination: path });
+      decisions[cur] = buildDecision("pa", { destination: path, folderState: folderState });
       closeAll();
       advance();
     }

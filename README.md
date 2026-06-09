@@ -39,7 +39,9 @@ initTriage({
       label: "PARA-work",
       prefix: ".PARA-work",
       sections: [
-        [{ name: "ProjectA" }, { name: "ProjectB" }],   // 1_Current_projects
+        // each leaf: { name, isNew?, folderState? } — folderState is the Stage 2
+        // enum, supplied by the skill so an override pick re-stamps provenance
+        [{ name: "ProjectA", folderState: "exists_in_outlook" }, { name: "ProjectB" }],
         [{ name: "AreaX" }],                              // 2_Areas
         [{ name: "ResourceY" }],                          // 3_Resources
         [{ name: "Inbox_trash" }]                         // 4_Archive
@@ -140,7 +142,7 @@ envelope:
 | `decisionKey` | `action` | `user_typed_params` |
 |------|------|------|
 | `a` (agree) | copied from `suggestion.action` | copy of `suggestion.parameterisation` |
-| `pa` | `pa` | `{ destination }` — selected PARA path |
+| `pa` | `pa` | `{ destination, folderState }` — selected PARA path + re-stamped provenance |
 | `wa`, `df` | same as key | `{ contextNote?, thresholdDate? }` — two-field panel; each field omitted when blank |
 | `de` | `de` | `{ delegationTarget }` — **required** free-text |
 | `cu` | `cu` | `{ note }` — **required** free-text |
@@ -157,8 +159,24 @@ their own. `de` (`delegationTarget`) and `cu` (`note`) open single required free
 panels — an empty submit **blocks** the decision (nothing written) and surfaces an
 inline "Required" hint, mirroring the new-folder panel's empty-name guard.
 
-Deferred to later sessions (not yet collected): `pa.folderState` tri-state derivation
-(audit §7 item 8).
+#### `pa.folderState` (override provenance, §7 item 8)
+
+When the operator **overrides** a `pa` destination — picking a different tree leaf or
+creating a new folder — the widget re-stamps `user_typed_params.folderState` with the
+Stage 2 enum (`exists_in_outlook` | `exists_in_onedrive` | `proposed`) so the stale
+Stage 2 value never rides an override. The mapping:
+
+- **`confirmNew` / `isNew` leaf** → `proposed` (operator invented the folder).
+- **existing leaf** → the leaf's skill-supplied `folderState`; falls back to
+  `exists_in_onedrive` when the skill left it blank (the tree is the OneDrive PARA
+  reference).
+- **agree / untouched** → Stage 2's value flows through verbatim (the widget copies
+  `suggestion.parameterisation`), so `exists_in_outlook` survives there for free.
+
+The widget never *invents* provenance — it reflects what the skill marked on the leaf,
+and only defaults when the leaf is unmarked. `exists_in_outlook` is therefore reachable
+on an override only when the skill stamps it on the leaf; otherwise it is an
+agree-path-only value ("widget dumb, skill smart").
 
 ### Keyboard shortcuts
 

@@ -33,7 +33,7 @@ const emails = [
     annotation: "Atlas sync tomorrow", threadRef: null,
     metadata: { id: "AAA", subject: "Re: Project Atlas notes", from: "alice@x.dk", source: "inbox", currentFolder: ".PARA-work" },
     stage1: { conversationId: "conv-1", inferenceClassification: "focused", flag: null, thresholdDate: null, contextNote: "<has angle> & amp" },
-    suggestion: makeSuggestion("AAA", "pa", { destination: ".PARA-work/1_Current_projects/Atlas" }) },
+    suggestion: makeSuggestion("AAA", "pa", { destination: ".PARA-work/1_Current_projects/Atlas", folderState: "exists_in_outlook" }) },
   { id: "BBB", sender: "newsletter@news.com", date: "Mon 09 Jun 08:30", subject: "Weekly digest",
     bodyPreview: "Top stories this week...", attachment: null, sentNotice: null,
     badgeLabel: "Triage dump", badgeClass: "badge-ar", suggestedAction: "ar",
@@ -54,10 +54,20 @@ const emails = [
     badgeLabel: "Waiting", badgeClass: "badge-wa", suggestedAction: "wa",
     suggestedPath: null, reason: "Awaiting external reply", annotation: null, threadRef: null,
     suggestion: makeSuggestion("EEE", "wa", { contextNote: "vendor to confirm pricing", thresholdDate: "2026-06-20" }) },
+  { id: "FFF", sender: "pm@x.dk", date: "Wed 04 Jun 10:00", subject: "Borealis kickoff",
+    bodyPreview: "Filing this under Borealis.", attachment: null, sentNotice: null,
+    badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa",
+    suggestedPath: null, reason: "Override to a marked leaf", annotation: null, threadRef: null,
+    suggestion: null },
+  { id: "GGG", sender: "lead@x.dk", date: "Tue 03 Jun 09:00", subject: "New initiative Helix",
+    bodyPreview: "No folder yet — create one.", attachment: null, sentNotice: null,
+    badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa",
+    suggestedPath: null, reason: "New folder via confirmNew", annotation: null, threadRef: null,
+    suggestion: null },
 ];
 const tree = {
   work: { label: "PARA-work", prefix: ".PARA-work", sections: [
-    [{ name: "Atlas" }, { name: "Borealis" }], [{ name: "Ops" }], [{ name: "Refs" }], [{ name: "0_Inbox_trash" }] ] },
+    [{ name: "Atlas" }, { name: "Borealis", folderState: "exists_in_outlook" }], [{ name: "Ops" }], [{ name: "Refs" }], [{ name: "0_Inbox_trash" }] ] },
   personal: { label: "PARA-personal", prefix: ".PARA-personal", sections: [
     [{ name: "House" }], [{ name: "Finance" }], [], [{ name: "0_Inbox_trash" }] ] },
 };
@@ -114,7 +124,7 @@ document.querySelectorAll(".tw-dot")[0].onclick();
 
 console.log("== decide do (email idx2 via dot) ==");
 document.querySelectorAll(".tw-dot")[2].onclick();
-ok("nav to email 3 of 5", document.getElementById("tw-pos").textContent === "3 of 5");
+ok("nav to email 3 of 7", document.getElementById("tw-pos").textContent === "3 of 7");
 window.TW.decide("do");
 
 console.log("== agree on a suggestion-bearing email ==");
@@ -179,12 +189,31 @@ ok("note has no visual flag when not pre-filled", !document.getElementById("tw-w
 document.getElementById("tw-wd-note").value = "chase next week";
 window.TW.confirmWaitDefer();
 
+console.log("== pa override to a skill-marked leaf (S47 item 8) — FFF ==");
+document.querySelectorAll(".tw-dot")[5].onclick();
+window.TW.decide("pa");
+ok("pa panel visible for FFF", document.getElementById("tw-pap").style.display === "block");
+const marked = document.querySelector('.tw-ti[data-col="0"][data-sec="0"][data-idx="1"]'); // Borealis
+ok("marked leaf (Borealis) rendered", !!marked && /Borealis/.test(marked.textContent));
+marked.dispatchEvent(new window.Event("click"));
+ok("pa panel closed after marked select", document.getElementById("tw-pap").style.display === "none");
+
+console.log("== pa new folder via confirmNew (S47 item 8) — GGG ==");
+document.querySelectorAll(".tw-dot")[6].onclick();
+window.TW.decide("pa");
+ok("pa panel visible for GGG", document.getElementById("tw-pap").style.display === "block");
+document.getElementById("tw-nr").value = "work";
+document.getElementById("tw-ns").value = "0"; // Projects
+document.getElementById("tw-nfn").value = "Helix";
+window.TW.confirmNew();
+ok("pa panel closed after confirmNew", document.getElementById("tw-pap").style.display === "none");
+
 console.log("== all decided, submit ==");
 ok("submit enabled", document.getElementById("tw-sub").disabled === false);
 window.TW.submit();
 ok("sendPrompt fired with batch:", !!lastPrompt && lastPrompt.startsWith("batch:"));
 const rows = JSON.parse(lastPrompt.slice("batch:".length));
-ok("5 rows emitted (all decided)", rows.length === 5, "got " + rows.length);
+ok("7 rows emitted (all decided)", rows.length === 7, "got " + rows.length);
 
 const byId = Object.fromEntries(rows.map((r) => [r.emailId, r]));
 ok("CCC decisionKey=do action=do params={}", byId.CCC.decisionKey === "do" && byId.CCC.action === "do" && Object.keys(byId.CCC.user_typed_params).length === 0);
@@ -193,6 +222,10 @@ ok("AAA agree -> decisionKey=a action=pa", byId.AAA.decisionKey === "a" && byId.
 ok("AAA agree copies suggestion.parameterisation.destination", byId.AAA.user_typed_params.destination === ".PARA-work/1_Current_projects/Atlas");
 ok("AAA params is a copy, not same ref", byId.AAA.user_typed_params !== emails[0].suggestion.parameterisation);
 ok("BBB decisionKey=pa with destination", byId.BBB.decisionKey === "pa" && typeof byId.BBB.user_typed_params.destination === "string");
+ok("AAA agree carries Stage 2 folderState verbatim (exists_in_outlook)", byId.AAA.user_typed_params.folderState === "exists_in_outlook");
+ok("BBB override of unmarked leaf defaults to exists_in_onedrive", byId.BBB.user_typed_params.folderState === "exists_in_onedrive");
+ok("FFF override of skill-marked leaf stamps exists_in_outlook", byId.FFF.decisionKey === "pa" && byId.FFF.user_typed_params.folderState === "exists_in_outlook" && /Borealis$/.test(byId.FFF.user_typed_params.destination));
+ok("GGG confirmNew stamps proposed", byId.GGG.decisionKey === "pa" && byId.GGG.user_typed_params.folderState === "proposed" && /Helix$/.test(byId.GGG.user_typed_params.destination));
 ok("DDD decisionKey=df contextNote set", byId.DDD.decisionKey === "df" && byId.DDD.user_typed_params.contextNote === "chase next week");
 ok("DDD df has no thresholdDate key (empty field omitted)", !("thresholdDate" in byId.DDD.user_typed_params));
 ok("DDD suggestion is null (omission case)", byId.DDD.suggestion === null);
@@ -208,7 +241,7 @@ document.querySelectorAll(".tw-dot")[0].onclick();
 window.TW.decide("st");
 window.TW.submit();
 const rows2 = JSON.parse(lastPrompt.slice("batch:".length));
-ok("st did not add/replace a row", rows2.length === 5 && rows2.find((r) => r.emailId === "AAA").decisionKey === "a");
+ok("st did not add/replace a row", rows2.length === 7 && rows2.find((r) => r.emailId === "AAA").decisionKey === "a");
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
