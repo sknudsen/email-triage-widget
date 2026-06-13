@@ -15,9 +15,11 @@
   is never agent-transcribed (the file is handed over by path). The only
   transport leg left is the ~3 KB submit, shipped back via onedrive-upload.
 
-  Markers replaced by build_artifact_doc (single source of truth, no drift):
-    /* __TRIAGE_WIDGET_IIFE__ */   -> the widget IIFE
-    /* __TRIAGE_CONFIG_JSON__ */   -> the aliased initTriage config JSON
+  build_artifact_doc replaces two markers, each appearing EXACTLY ONCE below
+  (the IIFE-marker in the first script, the config-marker in the tw-config
+  script) — do NOT repeat the literal marker tokens anywhere else in this file
+  (e.g. here in this comment): the replace is first-occurrence and the builder
+  asserts a single occurrence, so a stray copy would mis-bake or fail the build.
   assemble / alias / decision_log all stay in Python (agent land). The only JS
   here is the sendPrompt shim plus the initTriage bootstrap.
 -->
