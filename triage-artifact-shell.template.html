@@ -5,18 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Email triage — render &amp; capture</title>
 <!--
-  Stage 3 render+capture artifact shell (S63, #202 direction A).
+  Stage 3 render+capture artifact document (S64, #202 direction A — bake-config).
 
-  This is a TRANSPORT SHELL ONLY. It carries no triage business logic:
-    1. download the agent-built widget config (assemble --config-out, then
-       onedrive-uploaded to _scratch) via window.cowork.callMcpTool,
-    2. mount the widget by calling window.initTriage(config),
-    3. ship the raw `batch:` submit string back via onedrive-upload.
+  This is a per-run document, NOT a static shell. present.assemble.build_artifact_doc
+  bakes two things into it before handing it to create_artifact by path:
+    1. the widget IIFE (public/triage-widget.js) at the IIFE marker, and
+    2. the aliased initTriage config JSON at the config marker.
+  So nothing is fetched at runtime: the config does not ride OneDrive sync and
+  is never agent-transcribed (the file is handed over by path). The only
+  transport leg left is the ~3 KB submit, shipped back via onedrive-upload.
+
+  Markers replaced by build_artifact_doc (single source of truth, no drift):
+    /* __TRIAGE_WIDGET_IIFE__ */   -> the widget IIFE
+    /* __TRIAGE_CONFIG_JSON__ */   -> the aliased initTriage config JSON
   assemble / alias / decision_log all stay in Python (agent land). The only JS
-  here is the sendPrompt shim plus download/render/upload glue.
-
-  The widget IIFE (public/triage-widget.js) is inlined at the marker by
-  present.assemble.build_artifact_shell — single source of truth, no drift.
+  here is the sendPrompt shim plus the initTriage bootstrap.
 -->
 <style>
 :root{
@@ -50,39 +53,26 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 </style>
 </head>
 <body>
-<div id="tw-status">Loading latest triage config…</div>
+<div id="tw-status">Decide each card, then Submit batch.</div>
 <div id="tw-root"></div>
 
 <script>
 /* __TRIAGE_WIDGET_IIFE__ */
 </script>
 
+<script type="application/json" id="tw-config">/* __TRIAGE_CONFIG_JSON__ */</script>
+
 <script>
 (function () {
   "use strict";
-  // Fixed working paths on the synced OneDrive mount. The agent overwrites the
-  // config before each run (conflictBehavior replace) and reads the submit back.
-  var CONFIG_PATH = "PARA-meta/email-triage-snapshots/_scratch/artifact-widget-config.json";
+  // Fixed working path on the synced OneDrive mount. The agent reads the submit
+  // back from here after the operator clicks Submit batch.
   var SUBMIT_PATH = "PARA-meta/email-triage-snapshots/_scratch/artifact-widget-submit.json";
 
   function status(msg, cls) {
     var s = document.getElementById("tw-status");
     s.textContent = msg;
     s.className = cls || "";
-  }
-  // Unwrap a callMcpTool result to its text payload (doc'd shape).
-  function payloadText(r) {
-    if (r == null) return "";
-    if (r.structuredContent != null && typeof r.structuredContent === "object")
-      return JSON.stringify(r.structuredContent);
-    if (Array.isArray(r.content) && r.content[0] && typeof r.content[0].text === "string")
-      return r.content[0].text;
-    return typeof r === "string" ? r : JSON.stringify(r);
-  }
-  // onedrive-download inlines as "File: …\n---\n<body>"; strip the header.
-  function stripHeader(s) {
-    var i = s.indexOf("\n---\n");
-    return i >= 0 ? s.slice(i + 5).trim() : s.trim();
   }
 
   var submitted = false;
@@ -101,6 +91,10 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 
   async function uploadSubmit(signal) {
     if (submitted) { return; }
+    if (!(window.cowork && typeof window.cowork.callMcpTool === "function")) {
+      status("window.cowork.callMcpTool is unavailable — open this inside Cowork.", "err");
+      return;
+    }
     var rows = null;
     try { rows = JSON.parse(signal.slice("batch:".length)); } catch (e) {}
     var n = Array.isArray(rows) ? rows.length : "?";
@@ -115,31 +109,22 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     } catch (e) { status("Upload failed: " + e, "err"); }
   }
 
-  async function load() {
-    if (!(window.cowork && typeof window.cowork.callMcpTool === "function")) {
-      status("window.cowork.callMcpTool is unavailable — open this inside Cowork.", "err");
-      return;
-    }
+  function boot() {
     if (typeof window.initTriage !== "function") {
       status("Widget IIFE did not load (window.initTriage missing).", "err");
       return;
     }
+    var cfg;
     try {
-      var r = await window.cowork.callMcpTool("mcp__outlook-mcp__onedrive-download", { path: CONFIG_PATH });
-      if (r && r.isError) {
-        status("Could not download the config. Has the agent run " +
-               "`assemble --config-out` and uploaded it to _scratch? See console.", "err");
-        console.log(r); return;
-      }
-      var cfg = JSON.parse(stripHeader(payloadText(r)));
-      var n = (cfg.emails || []).length;
-      status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
-             " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit batch.", "");
-      window.initTriage(cfg);
-    } catch (e) { status("Load/parse error: " + e, "err"); }
+      cfg = JSON.parse(document.getElementById("tw-config").textContent);
+    } catch (e) { status("Baked config did not parse: " + e, "err"); return; }
+    var n = (cfg.emails || []).length;
+    status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
+           " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit batch.", "");
+    window.initTriage(cfg);
   }
 
-  load();
+  boot();
 })();
 </script>
 </body>
