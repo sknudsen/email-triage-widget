@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email triage — render &amp; capture</title>
+<!--
+  Stage 3 render+capture artifact shell (S63, #202 direction A).
+
+  This is a TRANSPORT SHELL ONLY. It carries no triage business logic:
+    1. download the agent-built widget config (assemble --config-out, then
+       onedrive-uploaded to _scratch) via window.cowork.callMcpTool,
+    2. mount the widget by calling window.initTriage(config),
+    3. ship the raw `batch:` submit string back via onedrive-upload.
+  assemble / alias / decision_log all stay in Python (agent land). The only JS
+  here is the sendPrompt shim plus download/render/upload glue.
+
+  The widget IIFE (public/triage-widget.js) is inlined at the marker by
+  present.assemble.build_artifact_shell — single source of truth, no drift.
+-->
+<style>
+:root{
+  color-scheme: light;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --border-radius-md: 6px;
+  --border-radius-lg: 10px;
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #555a60;
+  --color-text-tertiary: #8a9099;
+  --color-text-info: #1a5fb4;
+  --color-text-success: #1a6b1a;
+  --color-text-warning: #8a6d00;
+  --color-text-danger: #a1170f;
+  --color-background-primary: #ffffff;
+  --color-background-secondary: #f2f3f5;
+  --color-background-info: #e8f0fe;
+  --color-background-success: #e6f4e6;
+  --color-background-warning: #fbf3da;
+  --color-background-danger: #fde3e1;
+  --color-border-info: #1a5fb4;
+  --color-border-secondary: #cfd3d8;
+  --color-border-tertiary: #e3e6ea;
+}
+body{background:var(--color-background-primary);margin:0;padding:14px;font-family:var(--font-sans)}
+#tw-status{font:12px/1.5 var(--font-sans);margin-bottom:10px;padding:8px 10px;border-radius:8px;
+  background:var(--color-background-secondary);color:var(--color-text-secondary)}
+#tw-status.err{background:var(--color-background-danger);color:var(--color-text-danger)}
+#tw-status.ok{background:var(--color-background-success);color:var(--color-text-success)}
+</style>
+</head>
+<body>
+<div id="tw-status">Loading latest triage config…</div>
+<div id="tw-root"></div>
+
+<script>
+/* __TRIAGE_WIDGET_IIFE__ */
+</script>
+
+<script>
+(function () {
+  "use strict";
+  // Fixed working paths on the synced OneDrive mount. The agent overwrites the
+  // config before each run (conflictBehavior replace) and reads the submit back.
+  var CONFIG_PATH = "PARA-meta/email-triage-snapshots/_scratch/artifact-widget-config.json";
+  var SUBMIT_PATH = "PARA-meta/email-triage-snapshots/_scratch/artifact-widget-submit.json";
+
+  function status(msg, cls) {
+    var s = document.getElementById("tw-status");
+    s.textContent = msg;
+    s.className = cls || "";
+  }
+  // Unwrap a callMcpTool result to its text payload (doc'd shape).
+  function payloadText(r) {
+    if (r == null) return "";
+    if (r.structuredContent != null && typeof r.structuredContent === "object")
+      return JSON.stringify(r.structuredContent);
+    if (Array.isArray(r.content) && r.content[0] && typeof r.content[0].text === "string")
+      return r.content[0].text;
+    return typeof r === "string" ? r : JSON.stringify(r);
+  }
+  // onedrive-download inlines as "File: …\n---\n<body>"; strip the header.
+  function stripHeader(s) {
+    var i = s.indexOf("\n---\n");
+    return i >= 0 ? s.slice(i + 5).trim() : s.trim();
+  }
+
+  var submitted = false;
+
+  // The widget calls a global sendPrompt(); create_artifact has none, so we
+  // shim it. batch: -> upload the submit; details: -> graceful note.
+  window.sendPrompt = function (text) {
+    try {
+      if (typeof text === "string" && text.indexOf("batch:") === 0) { uploadSubmit(text); }
+      else if (typeof text === "string" && text.indexOf("details:") === 0) {
+        status("Details requested for " + text.slice("details:".length) +
+               " — details round-trip is not wired in this build.", "");
+      } else { console.log("[shell] sendPrompt:", text); }
+    } catch (e) { status("sendPrompt error: " + e, "err"); }
+  };
+
+  async function uploadSubmit(signal) {
+    if (submitted) { return; }
+    var rows = null;
+    try { rows = JSON.parse(signal.slice("batch:".length)); } catch (e) {}
+    var n = Array.isArray(rows) ? rows.length : "?";
+    status("Writing " + n + " decisions…", "");
+    try {
+      var up = await window.cowork.callMcpTool("mcp__outlook-mcp__onedrive-upload",
+        { path: SUBMIT_PATH, content: signal, conflictBehavior: "replace" });
+      if (up && up.isError) { status("Upload returned an error — see console.", "err"); console.log(up); return; }
+      submitted = true;
+      status("Submitted ✓ — " + n + " decisions written to _scratch/artifact-widget-submit.json. " +
+             "The agent can now de-alias + log (present.alias → decision_log).", "ok");
+    } catch (e) { status("Upload failed: " + e, "err"); }
+  }
+
+  async function load() {
+    if (!(window.cowork && typeof window.cowork.callMcpTool === "function")) {
+      status("window.cowork.callMcpTool is unavailable — open this inside Cowork.", "err");
+      return;
+    }
+    if (typeof window.initTriage !== "function") {
+      status("Widget IIFE did not load (window.initTriage missing).", "err");
+      return;
+    }
+    try {
+      var r = await window.cowork.callMcpTool("mcp__outlook-mcp__onedrive-download", { path: CONFIG_PATH });
+      if (r && r.isError) {
+        status("Could not download the config. Has the agent run " +
+               "`assemble --config-out` and uploaded it to _scratch? See console.", "err");
+        console.log(r); return;
+      }
+      var cfg = JSON.parse(stripHeader(payloadText(r)));
+      var n = (cfg.emails || []).length;
+      status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
+             " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit batch.", "");
+      window.initTriage(cfg);
+    } catch (e) { status("Load/parse error: " + e, "err"); }
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>
