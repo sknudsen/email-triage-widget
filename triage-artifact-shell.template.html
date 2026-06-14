@@ -55,7 +55,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 </style>
 </head>
 <body>
-<div id="tw-status">Decide each card, then Submit batch.</div>
+<div id="tw-status">Decide each card, then Submit page.</div>
 <div id="tw-root"></div>
 
 <script>
@@ -67,17 +67,22 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 <script>
 (function () {
   "use strict";
-  // Fixed working path on the synced OneDrive mount. The agent reads the submit
-  // back from here after the operator clicks Submit batch.
-  var SUBMIT_PATH = "PARA-meta/email-triage-snapshots/_scratch/artifact-widget-submit.json";
+  // Working dir on the synced OneDrive mount. Per-page append-only (#214): each
+  // page submit writes its OWN file here (never overwrites), so a page finished
+  // before the artifact dies survives. The agent drains every artifact-submit-*
+  // file (de-alias against the one baked alias map -> decision_log per file).
+  var SUBMIT_DIR = "PARA-meta/email-triage-snapshots/_scratch";
+
+  // Stamp of the baked snapshot, set at boot from the config; namespaces the
+  // per-page submit files so concurrent snapshots never collide.
+  var stamp = null;
+  var submitCount = 0;
 
   function status(msg, cls) {
     var s = document.getElementById("tw-status");
     s.textContent = msg;
     s.className = cls || "";
   }
-
-  var submitted = false;
 
   // The widget calls a global sendPrompt(); create_artifact has none, so we
   // shim it. batch: -> upload the submit; details: -> graceful note.
@@ -92,7 +97,6 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
   };
 
   async function uploadSubmit(signal) {
-    if (submitted) { return; }
     if (!(window.cowork && typeof window.cowork.callMcpTool === "function")) {
       status("window.cowork.callMcpTool is unavailable — open this inside Cowork.", "err");
       return;
@@ -100,15 +104,20 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     var rows = null;
     try { rows = JSON.parse(signal.slice("batch:".length)); } catch (e) {}
     var n = Array.isArray(rows) ? rows.length : "?";
-    status("Writing " + n + " decisions…", "");
+    // Unique per-page filename: never overwrite a prior page's submit. The
+    // monotonic count + timestamp keeps files ordered and collision-free.
+    var seq = ("000" + (++submitCount)).slice(-3);
+    var fname = "artifact-submit-" + (stamp || "nostamp") + "-p" + seq + "-" + Date.now() + ".json";
+    var path = SUBMIT_DIR + "/" + fname;
+    status("Writing page (" + n + " decisions)…", "");
     try {
       var up = await window.cowork.callMcpTool("mcp__outlook-mcp__onedrive-upload",
-        { path: SUBMIT_PATH, content: signal, conflictBehavior: "replace" });
-      if (up && up.isError) { status("Upload returned an error — see console.", "err"); console.log(up); return; }
-      submitted = true;
-      status("Submitted ✓ — " + n + " decisions written to _scratch/artifact-widget-submit.json. " +
-             "The agent can now de-alias + log (present.alias → decision_log).", "ok");
-    } catch (e) { status("Upload failed: " + e, "err"); }
+        { path: path, content: signal, conflictBehavior: "fail" });
+      if (up && up.isError) { submitCount--; status("Upload returned an error — see console.", "err"); console.log(up); return; }
+      status("Page submitted ✓ — " + n + " decisions written to _scratch/" + fname + ". " +
+             submitCount + " page(s) submitted this sitting. Keep going or close when done; " +
+             "the agent de-aliases + logs each page (present.alias → decision_log).", "ok");
+    } catch (e) { submitCount--; status("Upload failed: " + e, "err"); }
   }
 
   function boot() {
@@ -120,9 +129,11 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     try {
       cfg = JSON.parse(document.getElementById("tw-config").textContent);
     } catch (e) { status("Baked config did not parse: " + e, "err"); return; }
+    stamp = cfg.stamp || null;
     var n = (cfg.emails || []).length;
     status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
-           " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit batch.", "");
+           " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit page " +
+           "— each page is saved on its own, so you can stop any time.", "");
     window.initTriage(cfg);
   }
 
