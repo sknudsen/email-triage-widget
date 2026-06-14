@@ -32,9 +32,63 @@
   const SEC_KEYS = ["1_Current_projects", "2_Areas", "3_Resources", "4_Archive"];
 
   function initTriage(cfg) {
-    const emails = cfg.emails;
     const tree = cfg.tree;
     const batchNum = cfg.batch || 1;
+    const quotes = (cfg.quotes && cfg.quotes.length) ? cfg.quotes.slice() : [];
+    const stamp = cfg.stamp || null;
+    const root = document.getElementById("tw-root");
+    function pickQuote() { return quotes.length ? quotes[Math.floor(Math.random() * quotes.length)] : ""; }
+
+    /* --- Resume persistence (Stop / #214). When the config carries a stamp,
+       remember which emailIds were submitted (per-page submit OR a Stop flush)
+       in localStorage, and on reopen drop them so only the remaining cards
+       render — the missed cards surface first, and an already-moved email is
+       never re-dispatched (so the executor can't 404 on a re-submit). Gated on
+       `stamp`, so show_widget / jsdom runs without one keep the old behaviour. */
+    const STORE_KEY = stamp ? ("triage:submitted:" + stamp) : null;
+    function loadSubmitted() {
+      if (!STORE_KEY) return {};
+      try { const raw = window.localStorage.getItem(STORE_KEY); if (raw) { const m = {}; JSON.parse(raw).forEach((id) => { m[id] = true; }); return m; } } catch (e) {}
+      return {};
+    }
+    function persistSubmitted(ids) {
+      if (!STORE_KEY || !ids.length) return;
+      try { const m = loadSubmitted(); ids.forEach((id) => { m[id] = true; }); window.localStorage.setItem(STORE_KEY, JSON.stringify(Object.keys(m))); } catch (e) {}
+    }
+    const priorSubmitted = loadSubmitted();
+    const emails = (cfg.emails || []).filter((e) => !priorSubmitted[e.id]);
+
+    // Everything in this snapshot was already triaged in a prior sitting.
+    if (emails.length === 0) {
+      const q0 = pickQuote();
+      root.innerHTML = '<div class="tw-done"><div class="tw-done-h">🎉 Inbox zero</div>' +
+        '<div class="tw-done-s">Every card in this snapshot has been triaged.</div>' +
+        (q0 ? '<div class="tw-quote">' + q0 + "</div>" : "") + "</div>";
+      window.TW = { go() {}, goPage() {}, decide() {}, submit() {}, stop() {}, confirmStop() {}, cancelStop() {}, toggleDetails() {} };
+      return;
+    }
+
+    /* --- Paging (#214) — fixed pages of 13, client-side over the baked set.
+       The artifact bakes ALL triage subjects; the widget paginates them in the
+       browser (zero latency) and submits one append-only batch per page. `cur`
+       is a global index into `emails`; navigation/dots/submit are scoped to the
+       current page. */
+    const PAGE_SIZE = 13;
+    const pageCount = Math.max(1, Math.ceil(emails.length / PAGE_SIZE));
+    let curPage = 0;
+    let stopped = false;       // Stop ends the sitting (terminal screen)
+    let celebration = "";      // last celebration quote, shown after a submit
+    const submittedPages = {}; // page index -> true once its batch is submitted
+    function pageBounds(p) {
+      const start = p * PAGE_SIZE;
+      return { start: start, end: Math.min(start + PAGE_SIZE, emails.length) };
+    }
+    function pageDecidedCount(p) {
+      const b = pageBounds(p);
+      let n = 0;
+      for (let i = b.start; i < b.end; i++) if (decisions[i]) n++;
+      return n;
+    }
 
     /* --- State --- */
     let cur = 0;
@@ -93,6 +147,12 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 .tw-sb{font-size:14px;padding:10px 24px;border-radius:var(--border-radius-md);border:none;background:var(--color-border-info);color:#fff;cursor:pointer;font-weight:500}
 .tw-sb:disabled{opacity:.3;cursor:default}
 .tw-sb:hover:not(:disabled){opacity:.85}
+.tw-cel{margin:4px 0 10px;padding:8px 12px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);font-size:13px;font-style:italic;text-align:center}
+.tw-stopbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:10px;padding:8px 12px;border-radius:var(--border-radius-md);background:var(--color-background-warning);color:var(--color-text-warning);font-size:13px}
+.tw-done{padding:2rem 1rem;text-align:center}
+.tw-done-h{font-size:20px;font-weight:600;color:var(--color-text-primary);margin-bottom:8px}
+.tw-done-s{font-size:13px;color:var(--color-text-secondary);margin-bottom:14px}
+.tw-quote{font-size:14px;font-style:italic;color:var(--color-text-success);max-width:34rem;margin:0 auto}
 .tw-pnl{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-top:6px}
 .tw-pt{font-size:13px;font-weight:500;margin-bottom:10px;color:var(--color-text-primary)}
 .tw-pg{display:grid;grid-template-columns:1fr 1fr}
@@ -142,17 +202,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     document.head.appendChild(style);
 
     /* --- Build HTML --- */
-    const root = document.getElementById("tw-root");
     root.innerHTML = `
 <div style="padding:.5rem 0">
-  <div class="tw-bar"><span class="tw-lbl">Batch ${batchNum}</span><div class="tw-dots" id="tw-dots"></div><span class="tw-lbl" id="tw-dc">0 / 0 decided</span></div>
-  <div class="tw-nav"><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)">← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)">Next →</button></div>
+  <div class="tw-bar"><span class="tw-lbl" id="tw-page">Page 1 of 1</span><div class="tw-dots" id="tw-dots"></div><span class="tw-lbl" id="tw-dc">0 / 0 decided</span></div>
+  <div class="tw-nav"><button class="tw-nbtn" id="tw-ppage" onclick="TW.goPage(-1)">◀ Page</button><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)">← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)">Next →</button><button class="tw-nbtn" id="tw-npage" onclick="TW.goPage(1)">Page ▶</button></div>
+  <div id="tw-cel" class="tw-cel" style="display:none"></div>
   <div id="tw-card"></div>
   <div class="tw-bg">
     <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-a" onclick="TW.decide('a')"><span class="tw-ac">a</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
     <div class="tw-bc"><div class="tw-cl">Handle now</div><button class="tw-a" id="btn-do" onclick="TW.decide('do')"><span class="tw-ac">do</span>Do now</button><button class="tw-a" id="btn-de" onclick="TW.decide('de')"><span class="tw-ac">de</span>Delegate</button><button class="tw-a" id="btn-wa" onclick="TW.decide('wa')"><span class="tw-ac">wa</span>Waiting</button></div>
     <div class="tw-bc"><div class="tw-cl">Defer</div><button class="tw-a" id="btn-su" onclick="TW.decide('su')"><span class="tw-ac">su</span>Sunsama</button><button class="tw-a" id="btn-df" onclick="TW.decide('df')"><span class="tw-ac">df</span>Defer</button><button class="tw-a" id="btn-un" onclick="TW.decide('un')"><span class="tw-ac">un</span>Undecided</button></div>
-    <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button></div>
+    <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">sk</span>Skip</button></div>
   </div>
   <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
   <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pg" id="tw-pgrid"></div>
@@ -166,7 +226,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     <div class="tw-pr"><button class="tw-cb" onclick="TW.confirmWaitDefer()">Confirm</button></div></div></div>
   <div id="tw-dep" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-de-tgt" placeholder="Delegate to… (required)"/><button class="tw-cb" onclick="TW.confirmDelegate()">Delegate</button></div><div class="tw-req" id="tw-de-hint">Required — enter a delegate.</div></div></div>
   <div id="tw-cup" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-cu-note" placeholder="Custom note… (required)"/><button class="tw-cb" onclick="TW.confirmCustom()">Save</button></div><div class="tw-req" id="tw-cu-hint">Required — enter a note.</div></div></div>
-  <div class="tw-sr"><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit batch</button></div>
+  <div id="tw-stopbar" class="tw-stopbar" style="display:none"><span id="tw-stopmsg"></span><button class="tw-cb" id="tw-stopok" onclick="TW.confirmStop()">Confirm stop</button><button class="tw-nbtn" onclick="TW.cancelStop()">Cancel</button></div>
+  <div class="tw-sr"><span class="tw-lbl" id="tw-gp"></span><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit page</button></div>
 </div>`;
 
     /* --- Helpers --- */
@@ -175,21 +236,45 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     function renderDots() {
       const c = $("tw-dots");
       c.innerHTML = "";
-      emails.forEach((_, i) => {
+      const b = pageBounds(curPage);
+      for (let i = b.start; i < b.end; i++) {
         const d = document.createElement("span");
         d.className = "tw-dot" + (decisions[i] ? " decided" : "") + (i === cur ? " current" : "");
-        d.onclick = () => { cur = i; render(); };
+        d.onclick = (function (idx) { return function () { cur = idx; render(); }; })(i);
         c.appendChild(d);
-      });
-      $("tw-dc").textContent = decisions.filter(Boolean).length + " / " + emails.length + " decided";
-      $("tw-sub").disabled = decisions.some((d) => !d);
+      }
+      const pageTotal = b.end - b.start;
+      const pageDecided = pageDecidedCount(curPage);
+      const done = submittedPages[curPage];
+      $("tw-dc").textContent = pageDecided + " / " + pageTotal + " decided";
+      // Submit a page only when all its cards are decided and it hasn't already
+      // been submitted (per-page append-only — #214).
+      $("tw-sub").disabled = done || pageTotal === 0 || pageDecided < pageTotal;
+      $("tw-sub").textContent = done ? "Page submitted ✓" : "Submit page";
+      const overall = decisions.filter(Boolean).length;
+      $("tw-gp").textContent =
+        overall + " / " + emails.length + " decided overall · " +
+        Object.keys(submittedPages).length + " of " + pageCount + " pages submitted";
     }
 
     function render() {
       closeAll();
       const e = emails[cur];
+      const pb = pageBounds(curPage);
       let h = '<div class="tw-card' + (detailsOpen ? " open" : "") + '">';
-      if (e.threadRef) h += '<div class="tw-thr">🔗 ' + e.threadRef + "</div>";
+      // Thread line (#214 mix): the run-level part comes baked from Stage 3
+      // (`threadRef` — "N other emails in this thread"); the widget appends the
+      // page-local part ("X in this carousel"), which only it can know.
+      let thr = e.threadRef || "";
+      const conv = e.metadata && e.metadata.conversationId;
+      if (conv) {
+        let inCar = 0;
+        for (let i = pb.start; i < pb.end; i++) {
+          if (i !== cur && emails[i].metadata && emails[i].metadata.conversationId === conv) inCar++;
+        }
+        if (inCar > 0) thr = (thr ? thr + ", " : "") + inCar + " in this carousel";
+      }
+      if (thr) h += '<div class="tw-thr">🔗 ' + thr + "</div>";
       h += '<div class="tw-mr"><span class="tw-k">From</span><span class="tw-v">' + e.sender + "</span>";
       if (decisions[cur]) h += '<span class="tw-dtag">✓ ' + decisions[cur].decisionKey.toUpperCase() + "</span>";
       h += '</div><div class="tw-mr"><span class="tw-k">Date</span><span class="tw-v">' + e.date + "</span></div>";
@@ -209,15 +294,37 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       document.querySelectorAll("button.tw-a").forEach((b) => b.classList.remove("hl"));
       const sb = $("btn-" + e.suggestedAction);
       if (sb) sb.classList.add("hl");
-      $("tw-prev").disabled = cur === 0;
-      $("tw-next").disabled = cur === emails.length - 1;
-      $("tw-pos").textContent = cur + 1 + " of " + emails.length;
+      $("tw-prev").disabled = cur === pb.start;
+      $("tw-next").disabled = cur === pb.end - 1;
+      $("tw-ppage").disabled = curPage === 0;
+      $("tw-npage").disabled = curPage >= pageCount - 1;
+      $("tw-pos").textContent = (cur - pb.start + 1) + " of " + (pb.end - pb.start);
+      $("tw-page").textContent = "Page " + (curPage + 1) + " of " + pageCount;
+      const cel = $("tw-cel");
+      if (celebration) { cel.textContent = "🎉 " + celebration; cel.style.display = "block"; }
+      else { cel.style.display = "none"; }
       renderDots();
     }
 
+    /* Terminal screen after Stop — the sitting is over; reopening the artifact
+       resumes on the remaining cards (localStorage filter). */
+    function renderStopped(flushed) {
+      const remaining = decisions.filter((d) => !d).length;
+      const q = pickQuote();
+      root.innerHTML = '<div class="tw-done"><div class="tw-done-h">⏸ Stopped</div>' +
+        '<div class="tw-done-s">Flushed ' + flushed + " decision" + (flushed !== 1 ? "s" : "") + ". " +
+        (remaining > 0
+          ? "Reopen this artifact to continue with the " + remaining + " remaining."
+          : "Inbox zero — nothing left! 🎉") + "</div>" +
+        (q ? '<div class="tw-quote">' + q + "</div>" : "") + "</div>";
+    }
+
     function advance() {
-      for (let i = cur + 1; i < emails.length; i++) { if (!decisions[i]) { cur = i; render(); return; } }
-      for (let i = 0; i < cur; i++) { if (!decisions[i]) { cur = i; render(); return; } }
+      // Scoped to the current page — at page end we stay put (the operator
+      // submits the page, which advances to the next one). #214.
+      const b = pageBounds(curPage);
+      for (let i = cur + 1; i < b.end; i++) { if (!decisions[i]) { cur = i; render(); return; } }
+      for (let i = b.start; i < cur; i++) { if (!decisions[i]) { cur = i; render(); return; } }
       render();
     }
 
@@ -346,6 +453,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         action = (sug && sug.action) || e.suggestedAction || "a";
         utp = (sug && sug.parameterisation) ? Object.assign({}, sug.parameterisation) : {};
       }
+      if (code === "sk") { action = "keep"; } // skip: no-action, carrier leaves it in place (NOOP_ACTIONS)
       return {
         emailId: e.id,
         decisionKey: code,
@@ -392,19 +500,60 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     /* --- Public API (attached to window.TW) --- */
     window.TW = {
-      go(delta) { const n = cur + delta; if (n >= 0 && n < emails.length) { cur = n; render(); } },
+      go(delta) { const b = pageBounds(curPage); const n = cur + delta; if (n >= b.start && n < b.end) { cur = n; render(); } },
+
+      goPage(delta) {
+        const p = curPage + delta;
+        if (p < 0 || p >= pageCount) return;
+        curPage = p;
+        cur = pageBounds(p).start;
+        render();
+      },
 
       toggleDetails() { detailsOpen = !detailsOpen; render(); },
       openDetailsFile() { sendPrompt("details:" + emails[cur].id); }, // skill writes <snapshot>/details/<emailId>.md
 
       decide(code) {
+        if (code === "st") { window.TW.stop(); return; } // Stop = flush + end the sitting
+        if (stopped || submittedPages[curPage]) return; // page submitted / sitting stopped — locked
         if (code === "pa") { togglePanel("tw-pap"); return; }
         if (code === "df" || code === "wa") { openWaitDefer(code); return; }
         if (code === "de") { togglePanel("tw-dep"); setTimeout(() => $("tw-de-tgt").focus(), 50); return; }
         if (code === "cu") { togglePanel("tw-cup"); setTimeout(() => $("tw-cu-note").focus(), 50); return; }
-        if (code === "st") { renderDots(); return; } // S40 lock: stop writes NO row
         decisions[cur] = buildDecision(code, {});
         advance();
+      },
+
+      // Stop the whole sitting. Two-step: stop() arms a confirm bar (Stop ends
+      // the sitting, so guard against a fat-finger); confirmStop() commits.
+      stop() {
+        if (stopped) return;
+        let pending = 0;
+        for (let i = 0; i < emails.length; i++) {
+          const p = Math.floor(i / PAGE_SIZE);
+          if (decisions[i] && !submittedPages[p]) pending++;
+        }
+        $("tw-stopmsg").textContent = "Stop now? " + pending + " decided card" +
+          (pending !== 1 ? "s" : "") + " will be flushed; undecided cards return next time.";
+        $("tw-stopbar").style.display = "flex";
+      },
+
+      cancelStop() { const b = $("tw-stopbar"); if (b) b.style.display = "none"; },
+
+      // Commit the stop: flush every decided-but-unsubmitted row as one final
+      // batch (so carrier/executor can take them up), persist their ids for
+      // resume, and show the terminal screen. Undecided cards are left for the
+      // next open (#214 Stop).
+      confirmStop() {
+        if (stopped) return;
+        const out = [], ids = [];
+        for (let i = 0; i < emails.length; i++) {
+          const p = Math.floor(i / PAGE_SIZE);
+          if (decisions[i] && !submittedPages[p]) { out.push(decisions[i]); ids.push(emails[i].id); }
+        }
+        if (out.length) { sendPrompt("batch:" + JSON.stringify(out)); persistSubmitted(ids); }
+        stopped = true;
+        renderStopped(out.length);
       },
 
       confirmNew() {
@@ -445,9 +594,24 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       },
 
       submit() {
-        const out = [];
-        decisions.forEach((d) => { if (d) out.push(d); }); // omit untouched emails
+        // Per-page append-only submit (#214): emit ONLY the current page's
+        // decided rows as their own batch, lock the page, advance to the next.
+        // Each batch becomes its own immutable decisions-<stamp>/batch-*.json,
+        // so a page finished before the artifact dies is never lost.
+        if (stopped || submittedPages[curPage]) return;
+        const b = pageBounds(curPage);
+        const out = [], ids = [];
+        for (let i = b.start; i < b.end; i++) { if (decisions[i]) { out.push(decisions[i]); ids.push(emails[i].id); } } // omit untouched
+        if (!out.length) return;
         sendPrompt("batch:" + JSON.stringify(out));
+        submittedPages[curPage] = true;
+        persistSubmitted(ids); // remember for resume — skip on next open (no 404)
+        const allDone = Object.keys(submittedPages).length === pageCount;
+        // Celebrate the batch (the v1 widget showed a quote after a batch of 13).
+        const q = pickQuote();
+        celebration = allDone ? ("Inbox zero!" + (q ? " " + q : "")) : (q || "Batch done.");
+        if (!allDone && curPage < pageCount - 1) { curPage += 1; cur = pageBounds(curPage).start; }
+        render();
       },
     };
 
@@ -472,11 +636,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (e.key === "Escape") { closeAll(); return; }
       }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+      const sbar = $("tw-stopbar");
+      if (e.key === "Escape" && sbar && sbar.style.display !== "none") { window.TW.cancelStop(); return; }
       if (e.key === "Escape" && activePanel) { closeAll(); return; }
       if (e.key === "i") { e.preventDefault(); window.TW.toggleDetails(); return; } // S40: open/close details
       if (e.key === "ArrowLeft") { e.preventDefault(); window.TW.go(-1); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); window.TW.go(1); return; }
-      const map = { a: "a", cu: "cu", st: "st", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", ar: "ar" };
+      const map = { a: "a", cu: "cu", st: "st", sk: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", ar: "ar" };
       const buf = window._kbBuf || "", cand = buf + e.key;
       if (map[cand]) { e.preventDefault(); window._kbBuf = ""; window.TW.decide(map[cand]); return; }
       if ("acdwusp".includes(e.key.toLowerCase())) { window._kbBuf = e.key; setTimeout(() => { if (window._kbBuf === e.key) window._kbBuf = ""; }, 600); } else window._kbBuf = "";

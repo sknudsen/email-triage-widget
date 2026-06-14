@@ -72,7 +72,9 @@ const tree = {
     [{ name: "House" }], [{ name: "Finance" }], [], [{ name: "0_Inbox_trash" }] ] },
 };
 
-const dom = new JSDOM(`<!DOCTYPE html><body><div id="tw-root"></div></body>`, { runScripts: "outside-only", pretendToBeVisual: true });
+// A real origin (url) so window.localStorage works — the S68 resume scenario
+// relies on it (jsdom gives no localStorage on the default opaque origin).
+const dom = new JSDOM(`<!DOCTYPE html><body><div id="tw-root"></div></body>`, { runScripts: "outside-only", pretendToBeVisual: true, url: "https://triage.local/" });
 const { window } = dom;
 global.window = window; global.document = window.document;
 window.scrollTo = () => {};
@@ -236,12 +238,123 @@ ok("every row has the 6 envelope keys + ISO timestamp", rows.every((r) =>
   ["emailId","decisionKey","timestamp","action","user_typed_params","suggestion"].every((k) => k in r) &&
   /^\d{4}-\d{2}-\d{2}T/.test(r.timestamp)));
 
-console.log("== st (stop) writes no row ==");
+console.log("== page locked after submit (#214) ==");
+lastPrompt = null;
 document.querySelectorAll(".tw-dot")[0].onclick();
-window.TW.decide("st");
+window.TW.decide("ar");  // no-op on a submitted page
+window.TW.submit();      // no-op on a submitted page
+ok("submitted page is locked — no re-submit fires", lastPrompt === null);
+ok("submit button shows submitted state", document.getElementById("tw-sub").textContent.indexOf("submitted") !== -1);
+ok("AAA decision unchanged after locked ar", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+
+/* ===== Multi-page paging scenario (#214): 15 emails -> 2 pages (13 + 2) ===== */
+console.log("\n== multi-page paging (#214) ==");
+const $g = (id) => document.getElementById(id);
+function mkP(i) {
+  return { id: "E" + i, sender: "s" + i + "@x.dk", date: "Mon", subject: "S" + i,
+    bodyPreview: "b" + i, attachment: null, sentNotice: null,
+    badgeLabel: "Triage dump", badgeClass: "badge-ar", suggestedAction: "ar",
+    suggestedPath: null, reason: "r" + i, annotation: null, threadRef: null,
+    suggestion: null, metadata: { conversationId: "C" + i } };
+}
+const emailsP = [];
+for (let i = 0; i < 15; i++) emailsP.push(mkP(i));
+// E0 + E1 share a conversation, both on page 0 -> carousel count 1.
+emailsP[0].metadata.conversationId = "CONVPG"; emailsP[0].threadRef = "1 other email in this thread";
+emailsP[1].metadata.conversationId = "CONVPG"; emailsP[1].threadRef = "1 other email in this thread";
+
+window.initTriage({ batch: 1, total: 15, emails: emailsP, tree });
+ok("page label shows 2 pages", $g("tw-page").textContent === "Page 1 of 2");
+ok("13 dots on page 0 (page-scoped)", document.querySelectorAll(".tw-dot").length === 13);
+ok("pos is within-page (1 of 13)", $g("tw-pos").textContent === "1 of 13");
+ok("thread line mixes run + carousel", !!document.querySelector(".tw-thr") &&
+  /1 other email in this thread, 1 in this carousel/.test(document.querySelector(".tw-thr").textContent));
+ok("prev disabled at page start", $g("tw-prev").disabled === true);
+ok("page-prev disabled on first page", $g("tw-ppage").disabled === true);
+
+// Decide all 13 on page 0, then submit the page.
+for (let k = 0; k < 13; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
+ok("page 0 submit enabled after 13 decided", $g("tw-sub").disabled === false);
+lastPrompt = null;
 window.TW.submit();
-const rows2 = JSON.parse(lastPrompt.slice("batch:".length));
-ok("st did not add/replace a row", rows2.length === 7 && rows2.find((r) => r.emailId === "AAA").decisionKey === "a");
+ok("page 0 submit emits exactly 13 rows", !!lastPrompt && JSON.parse(lastPrompt.slice(6)).length === 13);
+ok("auto-advanced to page 2 after submit", $g("tw-page").textContent === "Page 2 of 2");
+ok("page 2 has 2 dots", document.querySelectorAll(".tw-dot").length === 2);
+ok("page 2 submit disabled (none decided)", $g("tw-sub").disabled === true);
+
+// An undecided card keeps its page un-submittable.
+document.querySelectorAll(".tw-dot")[0].onclick(); window.TW.decide("do"); // E13
+ok("page 2 submit blocked with 1 of 2 decided", $g("tw-sub").disabled === true);
+
+// Decide the second card, submit page 2.
+document.querySelectorAll(".tw-dot")[1].onclick(); window.TW.decide("ar");
+ok("page 2 submit enabled after both decided", $g("tw-sub").disabled === false);
+lastPrompt = null;
+window.TW.submit();
+ok("page 2 submit emits exactly 2 rows", !!lastPrompt && JSON.parse(lastPrompt.slice(6)).length === 2);
+
+// Revisiting a submitted page shows it locked.
+window.TW.goPage(-1);
+ok("goPage back to page 1", $g("tw-page").textContent === "Page 1 of 2");
+ok("revisited page 1 still locked", $g("tw-sub").textContent.indexOf("submitted") !== -1);
+
+/* ===== Stop + localStorage resume + celebration quote (S68) ===== */
+console.log("\n== stop / resume / quote (S68) ==");
+try { window.localStorage.clear(); } catch (e) {}
+const STAMP = "2026-06-13_11-55-13+02-00";
+const quotes = ["Long story short, I survived.", "It's me, hi."];
+function mkS(n) { const a = []; for (let i = 0; i < n; i++) a.push(mkP(i)); return a; }
+
+// 20 emails -> 2 pages (13 + 7), WITH a stamp so resume persistence is active.
+window.initTriage({ stamp: STAMP, batch: 1, total: 20, emails: mkS(20), tree, quotes });
+ok("fresh session renders 13 dots on page 0", document.querySelectorAll(".tw-dot").length === 13);
+// Decide + submit page 0 -> celebration quote shown, ids persisted.
+for (let k = 0; k < 13; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
+window.TW.submit();
+ok("celebration banner shown after submit", $g("tw-cel").style.display === "block" && $g("tw-cel").textContent.indexOf("🎉") === 0);
+ok("celebration uses a baked quote", quotes.some((q) => $g("tw-cel").textContent.indexOf(q) !== -1));
+// On page 1 (7 cards), decide 3 then STOP. Stop is two-step (confirm bar).
+for (let k = 0; k < 3; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
+lastPrompt = null;
+window.TW.stop();
+ok("stop arms a confirm bar (no flush yet)", $g("tw-stopbar").style.display === "flex" && lastPrompt === null);
+ok("confirm bar names the pending count", /3 decided cards/.test($g("tw-stopmsg").textContent));
+window.TW.cancelStop();
+ok("cancel hides the bar, still no flush", $g("tw-stopbar").style.display === "none" && lastPrompt === null);
+window.TW.stop();
+window.TW.confirmStop();
+ok("confirmStop flushed the 3 decided rows", !!lastPrompt && JSON.parse(lastPrompt.slice(6)).length === 3);
+ok("confirmStop renders terminal screen (no card)", !document.getElementById("tw-card") && /Stopped/.test(document.getElementById("tw-root").textContent));
+
+// Reopen the SAME artifact (same stamp): 13 submitted + 3 flushed = 16 filtered out -> 4 remain.
+window.initTriage({ stamp: STAMP, batch: 1, total: 20, emails: mkS(20), tree, quotes });
+ok("resume drops the 16 submitted ids", document.getElementById("tw-page").textContent === "Page 1 of 1");
+ok("resume shows the 4 missed cards", document.querySelectorAll(".tw-dot").length === 4);
+ok("missed-first: page opens on E16 (first un-submitted)", /S16/.test(document.getElementById("tw-card").textContent));
+
+// Finish the 4, submit -> inbox zero. Reopen -> done terminal.
+for (let k = 0; k < 4; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
+window.TW.submit();
+ok("inbox-zero celebration on final submit", $g("tw-cel").textContent.indexOf("Inbox zero") !== -1);
+window.initTriage({ stamp: STAMP, batch: 1, total: 20, emails: mkS(20), tree, quotes });
+ok("reopen after all done -> inbox-zero terminal", /Inbox zero/.test(document.getElementById("tw-root").textContent) && !document.getElementById("tw-card"));
+try { window.localStorage.clear(); } catch (e) {}
+
+/* ===== Skip action — no-op "keep" that satisfies the page-submit gate ===== */
+console.log("\n== skip action (no-op keep) ==");
+window.initTriage({ batch: 1, total: 3, emails: mkS(3), tree });
+ok("Skip button present in grid", !!$g("btn-sk"));
+document.querySelectorAll(".tw-dot")[0].onclick(); window.TW.decide("ar");
+document.querySelectorAll(".tw-dot")[1].onclick(); window.TW.decide("do");
+ok("page not submittable with 1 undecided", $g("tw-sub").disabled === true);
+document.querySelectorAll(".tw-dot")[2].onclick(); window.TW.decide("sk");
+ok("skip marks the card decided", document.querySelectorAll(".tw-dot")[2].className.indexOf("decided") !== -1);
+ok("page submittable after skip", $g("tw-sub").disabled === false);
+lastPrompt = null; window.TW.submit();
+const skrows = JSON.parse(lastPrompt.slice(6));
+const skrow = skrows.find((r) => r.decisionKey === "sk");
+ok("skip row emitted (decisionKey sk)", !!skrow);
+ok("skip resolves to action keep (carrier no-op)", skrow.action === "keep");
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
