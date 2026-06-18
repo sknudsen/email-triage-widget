@@ -15,6 +15,16 @@
  *     submit time. Shape: { emailId, source, action, actionConfidence,
  *     actionReasons, parameterisation, parameterisationConfidence,
  *     parameterisationReasons, relatedDecisions }. Omit if unavailable (-> null).
+ * deferSubfolders: [ { name, path, id? } ] — the children of Inbox/Defer, baked
+ *   by the Stage 3 producer (present/defer_payload.py) from the Stage 1 snapshot's
+ *   context.inboxFolders. Rendered as a select-only picker inside the shared
+ *   wait/defer fold-out (#tw-wdp), shown ONLY when wdAction === "df" (hidden for
+ *   "wa", which is always Inbox/Waiting). The "none → Inbox/Defer" default is a
+ *   first-class grid item, NOT a list entry (the parent itself); picking it omits
+ *   user_typed_params.destination so the carrier falls back to flat Inbox/Defer.
+ *   Picking a subfolder sets user_typed_params.destination = its path. No "create
+ *   new" (deliberate divergence from the PARA picker). Empty / absent -> the picker
+ *   is suppressed and df behaves as before (note + date only). #243.
  * tree: { work: { label, prefix, sections: [[{name,isNew?,folderState?}]] },
  *         personal: { label, prefix, sections: [[{name,isNew?,folderState?}]] } }
  *   - folderState (per leaf, optional): the Stage 2 enum
@@ -36,6 +46,7 @@
     const batchNum = cfg.batch || 1;
     const quotes = (cfg.quotes && cfg.quotes.length) ? cfg.quotes.slice() : [];
     const stamp = cfg.stamp || null;
+    const deferSubfolders = (cfg.deferSubfolders && cfg.deferSubfolders.length) ? cfg.deferSubfolders.slice() : [];
     const root = document.getElementById("tw-root");
     function pickQuote() { return quotes.length ? quotes[Math.floor(Math.random() * quotes.length)] : ""; }
 
@@ -96,6 +107,8 @@
     let detailsOpen = false; // S40 details panel: sticky across navigation
     let activePanel = null,
       wdAction = null, // 'wa' | 'df' — which action opened the shared wait/defer panel
+      dfDest = null,   // df picker: chosen subfolder path, or null = none → Inbox/Defer (#243)
+      dfFocus = 0,     // df picker: index of the keyboard-focused grid cell (#243)
       fCol = 0,
       fSec = 0,
       fIdx = 0;
@@ -190,6 +203,7 @@ button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 .tw-dft{margin-top:12px;border-top:.5px solid var(--color-border-tertiary);padding-top:10px;text-align:right}
 .tw-dfb{font-size:12px;padding:6px 12px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer}
 .tw-dfb:hover{background:var(--color-background-secondary)}
+.tw-dfg{display:flex;flex-direction:column;margin:4px 0 12px}
 .tw-wdf{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .tw-wdl{display:flex;flex-direction:column;gap:3px}
 .tw-wdl>span{font-size:11px;color:var(--color-text-secondary)}
@@ -219,6 +233,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" placeholder="New folder name…"/><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div></div></div>
   <div id="tw-wdp" style="display:none"><div class="tw-dfp">
     <div class="tw-pt" id="tw-wd-title">Defer</div>
+    <div id="tw-dfsub" style="display:none"><div class="tw-tsl">Defer subfolder · ↑↓ then Enter</div><div class="tw-dfg" id="tw-dfsgrid"></div></div>
     <div class="tw-wdf">
       <label class="tw-wdl"><span>Follow-up note<em class="tw-pfh" id="tw-wd-note-pf" style="display:none"> · from suggestion</em></span><input type="text" id="tw-wd-note" placeholder="optional"/></label>
       <label class="tw-wdl"><span>Threshold date<em class="tw-pfh" id="tw-wd-date-pf" style="display:none"> · from suggestion</em></span><input type="text" id="tw-wd-date" placeholder="YYYY-MM-DD (optional)"/></label>
@@ -428,15 +443,81 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       $(id).classList.remove("tw-pf");
       const hint = $(id + "-pf"); if (hint) hint.style.display = "none";
     }
+    /* --- Defer-subfolder picker (#243) -------------------------------------
+     * Lives inside the shared wait/defer fold-out, shown only for df. Mirrors
+     * the PARA picker's grid behaviour (focusable .tw-ti cells, ↑↓ navigate,
+     * Enter confirms) but over a flat single-column list, so it sidesteps the
+     * number-key collision with the free-text note input. The "none →
+     * Inbox/Defer" default is index 0 (a first-class grid item, path null);
+     * the real subfolders follow in the producer's order. Select-only — no
+     * "create new" (deliberate divergence from the PARA picker). Clicking a
+     * cell marks dfDest (lets the operator still add a note/date); Enter on a
+     * focused cell selects AND confirms the defer in one keystroke, so
+     * accept-as-suggested from a prefilled cell is a single Enter. */
+    function dfItems() {
+      return [{ name: "none → Inbox/Defer", path: null, none: true }]
+        .concat(deferSubfolders.map((s) => ({ name: s.name, path: s.path })));
+    }
+    function buildDeferGrid() {
+      const grid = $("tw-dfsgrid");
+      grid.innerHTML = "";
+      dfItems().forEach((it, i) => {
+        const row = document.createElement("div");
+        row.className = "tw-ti" + (it.none ? " nw" : "") + ((it.path || null) === dfDest ? " sel" : "");
+        row.dataset.idx = i;
+        row.dataset.path = it.path == null ? "" : it.path;
+        row.innerHTML = '<span class="tw-ico">📁</span>' + it.name;
+        row.addEventListener("click", () => selectDefer(i, false));
+        grid.appendChild(row);
+      });
+      dfSetFocus(dfFocus);
+    }
+    function dfCells() { return $("tw-dfsgrid").querySelectorAll(".tw-ti"); }
+    function dfSetFocus(i) {
+      const cells = dfCells();
+      if (!cells.length) return;
+      dfFocus = Math.max(0, Math.min(i, cells.length - 1));
+      cells.forEach((el, j) => el.classList.toggle("foc", j === dfFocus));
+      cells[dfFocus].scrollIntoView({ block: "nearest" });
+    }
+    function dfMove(delta) { dfSetFocus(dfFocus + delta); }
+    function selectDefer(idx, confirm) {
+      const cells = dfCells();
+      const el = cells[idx];
+      if (!el) return;
+      dfDest = el.dataset.path === "" ? null : el.dataset.path; // "" → none → Inbox/Defer
+      dfFocus = idx;
+      cells.forEach((c, j) => c.classList.toggle("sel", j === idx));
+      dfSetFocus(idx);
+      if (confirm) window.TW.confirmWaitDefer();
+    }
+
     function openWaitDefer(code) {
       togglePanel("tw-wdp");
       if (activePanel !== "tw-wdp") return; // toggled closed
       wdAction = code;
+      dfDest = null; dfFocus = 0;
       $("tw-wd-title").textContent = code === "wa" ? "Waiting for" : "Defer";
       const p = (emails[cur].suggestion && emails[cur].suggestion.parameterisation) || {};
       prefillField("tw-wd-note", p.contextNote);
       prefillField("tw-wd-date", p.thresholdDate);
-      setTimeout(() => $("tw-wd-note").focus(), 50);
+      // Defer-subfolder picker: only for df, only when subfolders exist (#243).
+      const showGrid = code === "df" && deferSubfolders.length > 0;
+      $("tw-dfsub").style.display = showGrid ? "block" : "none";
+      if (showGrid) {
+        // Prefill the selection from the suggestion's destination so
+        // accept-as-suggested is one keystroke. A "Inbox/Defer" (flat) or
+        // unmatched destination leaves the default "none" item focused.
+        const items = dfItems();
+        if (p.destination) {
+          const k = items.findIndex((it) => it.path === p.destination);
+          if (k >= 0) { dfDest = items[k].path; dfFocus = k; }
+        }
+        buildDeferGrid();
+        setTimeout(() => { try { $("tw-dfsgrid").querySelectorAll(".tw-ti")[dfFocus].focus(); } catch (e) {} }, 50);
+      } else {
+        setTimeout(() => $("tw-wd-note").focus(), 50);
+      }
     }
 
     /* --- Decision envelope (S42 locked shape) --- */
@@ -564,13 +645,18 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         selectPara(path, true);
       },
 
-      confirmWaitDefer() { // wa/df: both fields optional
+      confirmWaitDefer() { // wa/df: note + date optional; df adds a picked subfolder
         const note = $("tw-wd-note").value.trim(), date = $("tw-wd-date").value.trim();
         const utp = {};
         if (note) utp.contextNote = note;
         if (date) utp.thresholdDate = date;
+        // df only: a picked subfolder sets destination; none (dfDest null) omits
+        // it so the carrier falls back to flat Inbox/Defer (#243). wa never sets
+        // it (always Inbox/Waiting).
+        if (wdAction === "df" && dfDest) utp.destination = dfDest;
         decisions[cur] = buildDecision(wdAction || "df", utp);
         $("tw-wd-note").value = ""; $("tw-wd-date").value = "";
+        dfDest = null; dfFocus = 0;
         closeAll();
         advance();
       },
@@ -634,6 +720,18 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (e.key === "ArrowLeft" && fCol === 1) { e.preventDefault(); const n = findNearest(0, fSec, fIdx); if (n) setFocus(0, n.sec, n.idx); return; }
         if (e.key === "Enter") { e.preventDefault(); const el = getCell(fCol, fSec, fIdx); if (el) selectPara(el.dataset.path, false); return; }
         if (e.key === "Escape") { closeAll(); return; }
+      }
+      // Defer-subfolder grid (#243): same ↑↓/Enter pattern as the PARA tree,
+      // but only when focus isn't in the note/date inputs (so typing a note
+      // still works). Enter selects + confirms the focused subfolder.
+      if (activePanel === "tw-wdp" && wdAction === "df" && $("tw-dfsub").style.display !== "none") {
+        const ae = document.activeElement;
+        if (ae !== $("tw-wd-note") && ae !== $("tw-wd-date")) {
+          if (e.key === "ArrowDown") { e.preventDefault(); dfMove(1); return; }
+          if (e.key === "ArrowUp") { e.preventDefault(); dfMove(-1); return; }
+          if (e.key === "Enter") { e.preventDefault(); selectDefer(dfFocus, true); return; }
+          if (e.key === "Escape") { closeAll(); return; }
+        }
       }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
       const sbar = $("tw-stopbar");

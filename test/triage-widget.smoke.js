@@ -65,6 +65,13 @@ const emails = [
     suggestedPath: null, reason: "New folder via confirmNew", annotation: null, threadRef: null,
     suggestion: null },
 ];
+// Defer subfolders (#243): the producer's {name, path, id} shape. Picked items
+// set user_typed_params.destination; the implicit "none → Inbox/Defer" is added
+// by the widget as a first-class grid item, not listed here.
+const deferSubfolders = [
+  { name: "Defer_eboks", path: "Inbox/Defer/Defer_eboks", id: "id-eboks" },
+  { name: "Defer_finance", path: "Inbox/Defer/Defer_finance", id: "id-finance" },
+];
 const tree = {
   work: { label: "PARA-work", prefix: ".PARA-work", sections: [
     [{ name: "Atlas" }, { name: "Borealis", folderState: "exists_in_outlook" }], [{ name: "Ops" }], [{ name: "Refs" }], [{ name: "0_Inbox_trash" }] ] },
@@ -87,7 +94,7 @@ window.eval(WIDGET);
 
 console.log("== init ==");
 let threw = null;
-try { window.initTriage({ batch: 1, total: 4, emails, tree }); }
+try { window.initTriage({ batch: 1, total: 4, emails, tree, deferSubfolders }); }
 catch (e) { threw = e; }
 const card = () => document.querySelector(".tw-card");
 const panel = () => document.querySelector(".tw-dp");
@@ -171,6 +178,7 @@ document.querySelectorAll(".tw-dot")[4].onclick(); // valid cu advanced cursor o
 window.TW.decide("wa");
 ok("wa/df panel visible", document.getElementById("tw-wdp").style.display === "block");
 ok("panel title reflects wa", document.getElementById("tw-wd-title").textContent === "Waiting for");
+ok("defer-subfolder picker hidden for wa (#243)", document.getElementById("tw-dfsub").style.display === "none");
 ok("note pre-filled from suggestion.parameterisation", document.getElementById("tw-wd-note").value === "vendor to confirm pricing");
 ok("date pre-filled from suggestion.parameterisation", document.getElementById("tw-wd-date").value === "2026-06-20");
 ok("pre-filled note carries visual flag (tw-pf)", document.getElementById("tw-wd-note").classList.contains("tw-pf"));
@@ -188,6 +196,9 @@ ok("wa/df panel visible for df", document.getElementById("tw-wdp").style.display
 ok("panel title reflects df", document.getElementById("tw-wd-title").textContent === "Defer");
 ok("note empty (no suggestion to pre-fill)", document.getElementById("tw-wd-note").value === "");
 ok("note has no visual flag when not pre-filled", !document.getElementById("tw-wd-note").classList.contains("tw-pf"));
+ok("defer-subfolder picker visible for df (#243)", document.getElementById("tw-dfsub").style.display === "block");
+ok("picker has none + 2 subfolders (3 cells)", document.querySelectorAll("#tw-dfsgrid .tw-ti").length === 3);
+ok("none → Inbox/Defer is first cell, selected by default", (() => { const c = document.querySelectorAll("#tw-dfsgrid .tw-ti")[0]; return /Inbox\/Defer/.test(c.textContent) && c.classList.contains("sel"); })());
 document.getElementById("tw-wd-note").value = "chase next week";
 window.TW.confirmWaitDefer();
 
@@ -230,6 +241,7 @@ ok("FFF override of skill-marked leaf stamps exists_in_outlook", byId.FFF.decisi
 ok("GGG confirmNew stamps proposed", byId.GGG.decisionKey === "pa" && byId.GGG.user_typed_params.folderState === "proposed" && /Helix$/.test(byId.GGG.user_typed_params.destination));
 ok("DDD decisionKey=df contextNote set", byId.DDD.decisionKey === "df" && byId.DDD.user_typed_params.contextNote === "chase next week");
 ok("DDD df has no thresholdDate key (empty field omitted)", !("thresholdDate" in byId.DDD.user_typed_params));
+ok("DDD df none-picked omits destination (carrier → flat Inbox/Defer) (#243)", !("destination" in byId.DDD.user_typed_params));
 ok("DDD suggestion is null (omission case)", byId.DDD.suggestion === null);
 ok("EEE final decisionKey=wa action=wa", byId.EEE.decisionKey === "wa" && byId.EEE.action === "wa");
 ok("EEE wa carries pre-filled contextNote + thresholdDate", byId.EEE.user_typed_params.contextNote === "vendor to confirm pricing" && byId.EEE.user_typed_params.thresholdDate === "2026-06-20");
@@ -355,6 +367,77 @@ const skrows = JSON.parse(lastPrompt.slice(6));
 const skrow = skrows.find((r) => r.decisionKey === "sk");
 ok("skip row emitted (decisionKey sk)", !!skrow);
 ok("skip resolves to action keep (carrier no-op)", skrow.action === "keep");
+
+/* ===== Defer-subfolder picker — prefill, keyboard, click, none (#243) ===== */
+console.log("\n== defer-subfolder picker (#243) ==");
+function mkDf(id, sugDest) {
+  return { id, sender: id + "@x.dk", date: "Mon", subject: "Defer " + id,
+    bodyPreview: "", attachment: null, sentNotice: null,
+    badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
+    suggestedPath: null, reason: "r", annotation: null, threadRef: null,
+    suggestion: sugDest ? makeSuggestion(id, "df", { destination: sugDest }) : null };
+}
+// DF1 prefilled to a subfolder; DF2/DF3/DF4 no suggestion.
+const dfEmails = [
+  mkDf("DF1", "Inbox/Defer/Defer_finance"),
+  mkDf("DF2", null),
+  mkDf("DF3", null),
+  mkDf("DF4", null),
+];
+window.initTriage({ batch: 1, total: 4, emails: dfEmails, tree, deferSubfolders });
+
+// DF1 — prefill from suggestion.parameterisation.destination, then Enter-confirm.
+window.TW.decide("df");
+ok("DF1 picker visible", $g("tw-dfsub").style.display === "block");
+let dcells = document.querySelectorAll("#tw-dfsgrid .tw-ti");
+ok("DF1 prefill selects suggested subfolder (Defer_finance)", dcells[2].classList.contains("sel") && /Defer_finance/.test(dcells[2].textContent));
+ok("DF1 prefill focuses the suggested cell", dcells[2].classList.contains("foc"));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" })); // select + confirm in one keystroke
+ok("DF1 Enter-confirm closes the panel", $g("tw-wdp").style.display === "none");
+
+// DF2 — no prefill; ArrowDown then Enter selects the first real subfolder.
+document.querySelectorAll(".tw-dot")[1].onclick();
+window.TW.decide("df");
+dcells = document.querySelectorAll("#tw-dfsgrid .tw-ti");
+ok("DF2 none selected by default (no suggestion)", dcells[0].classList.contains("sel"));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "ArrowDown" }));
+ok("DF2 ArrowDown moves focus to Defer_eboks", dcells[1].classList.contains("foc"));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+
+// DF3 — no prefill; click-select Defer_finance (operator may still type a note).
+document.querySelectorAll(".tw-dot")[2].onclick();
+window.TW.decide("df");
+dcells = document.querySelectorAll("#tw-dfsgrid .tw-ti");
+dcells[2].dispatchEvent(new window.Event("click"));
+ok("DF3 click selects Defer_finance (sel)", document.querySelectorAll("#tw-dfsgrid .tw-ti")[2].classList.contains("sel"));
+document.getElementById("tw-wd-note").value = "with a note too";
+window.TW.confirmWaitDefer();
+
+// DF4 — leave none selected; destination must be omitted.
+document.querySelectorAll(".tw-dot")[3].onclick();
+window.TW.decide("df");
+window.TW.confirmWaitDefer();
+
+ok("all 4 df decided -> submit enabled", $g("tw-sub").disabled === false);
+lastPrompt = null;
+window.TW.submit();
+const dfRows = JSON.parse(lastPrompt.slice("batch:".length));
+const dfById = Object.fromEntries(dfRows.map((r) => [r.emailId, r]));
+ok("DF1 prefill+Enter -> destination = suggested path", dfById.DF1.user_typed_params.destination === "Inbox/Defer/Defer_finance");
+ok("DF1 decisionKey=df action=df", dfById.DF1.decisionKey === "df" && dfById.DF1.action === "df");
+ok("DF2 arrow+Enter -> destination = Defer_eboks", dfById.DF2.user_typed_params.destination === "Inbox/Defer/Defer_eboks");
+ok("DF3 click+note -> destination = Defer_finance AND contextNote set", dfById.DF3.user_typed_params.destination === "Inbox/Defer/Defer_finance" && dfById.DF3.user_typed_params.contextNote === "with a note too");
+ok("DF4 none -> destination omitted", !("destination" in dfById.DF4.user_typed_params));
+
+// Picker is suppressed entirely when no deferSubfolders are baked (degraded mode).
+console.log("== df picker suppressed when no deferSubfolders (#243) ==");
+window.initTriage({ batch: 1, total: 1, emails: [mkDf("DZ", null)], tree }); // no deferSubfolders
+window.TW.decide("df");
+ok("df panel still opens with no deferSubfolders", $g("tw-wdp").style.display === "block");
+ok("df picker hidden when deferSubfolders empty/absent", $g("tw-dfsub").style.display === "none");
+document.getElementById("tw-wd-note").value = "no picker here";
+window.TW.confirmWaitDefer();
+ok("df with no picker still works (decided)", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
