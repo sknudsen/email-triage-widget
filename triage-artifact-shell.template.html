@@ -104,19 +104,56 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     var rows = null;
     try { rows = JSON.parse(signal.slice("batch:".length)); } catch (e) {}
     var n = Array.isArray(rows) ? rows.length : "?";
-    // Unique per-page filename: never overwrite a prior page's submit. The
-    // monotonic count + timestamp keeps files ordered and collision-free.
+    // Unique per-page index: never overwrite a prior page's submit. The
+    // monotonic count keeps files ordered (the server / fallback stamp the ts).
     var seq = ("000" + (++submitCount)).slice(-3);
+    status("Writing page (" + n + " decisions)…", "");
+
+    // Preferred transport (#204): the local triage-transport MCP writes the
+    // submit straight to the local _scratch dir (canonical filename), so the
+    // drain reads a genuine local file — no OneDrive round-trip, no hydration,
+    // and the raw `batch:[...]` payload avoids the onedrive-upload
+    // double-encoding. Falls back to onedrive-upload if the transport tool is
+    // not configured, so OneDrive stays the safety net until it's proven live.
+    //
+    // Distinguish the two failure shapes so a BROKEN transport is never read as
+    // "tool absent" (else the proving run silently sits on the fallback):
+    //   - throw          => tool not configured/reachable  -> quiet fallback
+    //   - returns isError => tool reached but FAILED        -> loud, flagged fallback
+    var transportFailed = null; // non-null = reached-but-errored; surfaced below
+    try {
+      var t = await window.cowork.callMcpTool("mcp__triage-transport__put_submit",
+        { stamp: stamp || "nostamp", seq: seq, payload: signal });
+      if (t && !t.isError) {
+        status("Page submitted ✓ (local transport) — " + n + " decisions. " +
+               submitCount + " page(s) this sitting. Keep going or close when done; " +
+               "the agent drains + logs each page (present.drain → decision_log).", "ok");
+        return;
+      }
+      transportFailed = (t && t.content && t.content[0] && t.content[0].text) || "transport returned isError";
+      console.warn("[shell] triage-transport put_submit ERRORED — falling back to OneDrive:", transportFailed, t);
+    } catch (e) {
+      console.info("[shell] triage-transport unavailable — using OneDrive fallback:", e);
+    }
+
+    // Fallback: legacy OneDrive upload. Same canonical filename so the drain
+    // globs it identically; client Date.now() is the ts.
     var fname = "artifact-submit-" + (stamp || "nostamp") + "-p" + seq + "-" + Date.now() + ".json";
     var path = SUBMIT_DIR + "/" + fname;
-    status("Writing page (" + n + " decisions)…", "");
     try {
       var up = await window.cowork.callMcpTool("mcp__outlook-mcp__onedrive-upload",
         { path: path, content: signal, conflictBehavior: "fail" });
       if (up && up.isError) { submitCount--; status("Upload returned an error — see console.", "err"); console.log(up); return; }
-      status("Page submitted ✓ — " + n + " decisions written to _scratch/" + fname + ". " +
-             submitCount + " page(s) submitted this sitting. Keep going or close when done; " +
-             "the agent de-aliases + logs each page (present.alias → decision_log).", "ok");
+      if (transportFailed) {
+        // Decisions ARE saved (via OneDrive), but the transport we're proving
+        // failed — flag it loudly (err style) so it isn't mistaken for success.
+        status("⚠ transport ERRORED (" + transportFailed + ") — saved " + n +
+               " decisions via OneDrive fallback to _scratch/" + fname + ". Check the MCP config; see console.", "err");
+      } else {
+        status("Page submitted ✓ (OneDrive fallback) — " + n + " decisions written to _scratch/" + fname + ". " +
+               submitCount + " page(s) submitted this sitting. Keep going or close when done; " +
+               "the agent drains + logs each page (present.drain → decision_log).", "ok");
+      }
     } catch (e) { submitCount--; status("Upload failed: " + e, "err"); }
   }
 
