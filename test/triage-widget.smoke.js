@@ -138,7 +138,7 @@ window.TW.decide("do");
 
 console.log("== agree on a suggestion-bearing email ==");
 document.querySelectorAll(".tw-dot")[0].onclick();
-window.TW.decide("a");
+window.TW.decide("ag");
 
 console.log("== pa tree open + select via API ==");
 document.querySelectorAll(".tw-dot")[1].onclick();
@@ -231,7 +231,7 @@ ok("7 rows emitted (all decided)", rows.length === 7, "got " + rows.length);
 const byId = Object.fromEntries(rows.map((r) => [r.emailId, r]));
 ok("CCC decisionKey=do action=do params={}", byId.CCC.decisionKey === "do" && byId.CCC.action === "do" && Object.keys(byId.CCC.user_typed_params).length === 0);
 ok("CCC carries suggestion", byId.CCC.suggestion && byId.CCC.suggestion.emailId === "CCC");
-ok("AAA agree -> decisionKey=a action=pa", byId.AAA.decisionKey === "a" && byId.AAA.action === "pa");
+ok("AAA agree -> decisionKey=ag action=pa", byId.AAA.decisionKey === "ag" && byId.AAA.action === "pa");
 ok("AAA agree copies suggestion.parameterisation.destination", byId.AAA.user_typed_params.destination === ".PARA-work/1_Current_projects/Atlas");
 ok("AAA params is a copy, not same ref", byId.AAA.user_typed_params !== emails[0].suggestion.parameterisation);
 ok("BBB decisionKey=pa with destination", byId.BBB.decisionKey === "pa" && typeof byId.BBB.user_typed_params.destination === "string");
@@ -258,6 +258,14 @@ window.TW.submit();      // no-op on a submitted page
 ok("submitted page is locked — no re-submit fires", lastPrompt === null);
 ok("submit button shows submitted state", document.getElementById("tw-sub").textContent.indexOf("submitted") !== -1);
 ok("AAA decision unchanged after locked ar", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+
+console.log("== #196 inline decision echo + .sel · #263 min-height · #195 ag button ==");
+// cur is on AAA (decided via Agree -> decisionKey "ag") from the dot click above.
+ok("#196 inline decision echo present on a decided card", !!document.querySelector(".tw-ydec"));
+ok("#196 echo names the decision (Agree)", /Agree/.test(document.querySelector(".tw-ydec").textContent));
+ok("#196 decided action button gets .sel (btn-ag)", document.getElementById("btn-ag").classList.contains("sel"));
+ok("#195 agree button is btn-ag, old single-char btn-a gone", !!document.getElementById("btn-ag") && !document.getElementById("btn-a"));
+ok("#263 .tw-card carries a min-height floor", document.querySelector("style").textContent.includes("min-height:248px"));
 
 /* ===== Multi-page paging scenario (#214): 15 emails -> 2 pages (13 + 2) ===== */
 console.log("\n== multi-page paging (#214) ==");
@@ -438,6 +446,33 @@ ok("df picker hidden when deferSubfolders empty/absent", $g("tw-dfsub").style.di
 document.getElementById("tw-wd-note").value = "no picker here";
 window.TW.confirmWaitDefer();
 ok("df with no picker still works (decided)", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+
+/* ===== #195 two-char keyboard: a→r reaches `ar` (no single-key short-circuit) ===== */
+console.log("\n== #195 keyboard ar / ag reachability ==");
+window.initTriage({ batch: 1, total: 2, emails: [mkP(0), mkP(1)], tree });
+document.querySelectorAll(".tw-dot")[0].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a" }));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "r" }));
+ok("#195 'a' then 'r' decides E0 (ar reachable, not short-circuited to agree)", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+document.querySelectorAll(".tw-dot")[1].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a" }));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "g" }));
+ok("#195 'a' then 'g' decides E1 (agree)", document.querySelectorAll(".tw-dot")[1].className.indexOf("decided") !== -1);
+lastPrompt = null; window.TW.submit();
+const kbById = Object.fromEntries(JSON.parse(lastPrompt.slice(6)).map((r) => [r.emailId, r]));
+ok("#195 a→r row carries decisionKey=ar", kbById.E0.decisionKey === "ar");
+ok("#195 a→g row carries decisionKey=ag (agree)", kbById.E1.decisionKey === "ag");
+
+/* ===== #183 empty-state for a no-suggestion card (suggestedAction null) ===== */
+console.log("\n== #183 no-suggestion empty state ==");
+const noSug = { id: "NS1", sender: "x@x.dk", date: "Mon", subject: "No suggestion here",
+  bodyPreview: "", attachment: null, sentNotice: null,
+  badgeLabel: "", badgeClass: "badge-un", suggestedAction: null,
+  suggestedPath: null, reason: "", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [noSug], tree });
+ok("#183 no-suggestion card shows the marker text", /no Stage 2 suggestion/.test(document.getElementById("tw-card").textContent));
+ok("#183 marker uses the muted tw-nosug class", !!document.querySelector(".tw-nosug"));
+ok("#183 nothing highlighted when there is no suggested action", document.querySelectorAll("button.tw-a.hl").length === 0);
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);

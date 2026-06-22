@@ -128,7 +128,7 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-nbtn{font-size:13px;padding:5px 12px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer}
 .tw-nbtn:hover{background:var(--color-background-secondary)}
 .tw-nbtn:disabled{opacity:.3;cursor:default}
-.tw-card{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;margin:0 0 .75rem}
+.tw-card{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;min-height:248px;margin:0 0 .75rem}
 .tw-mr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
 .tw-k{font-size:12px;color:var(--color-text-secondary)}
 .tw-v{font-size:14px;color:var(--color-text-primary)}
@@ -146,6 +146,9 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
 .tw-thr{font-size:12px;color:var(--color-text-info);margin-bottom:6px}
 .tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);margin-left:auto}
+.tw-ydec{font-size:12px;font-weight:600;color:var(--color-text-success);margin-top:6px;display:flex;align-items:center;gap:6px}
+.tw-ydec .tw-ac{font-size:10px;color:var(--color-text-success);font-family:var(--font-mono)}
+.tw-nosug{font-style:italic;color:var(--color-text-tertiary)}
 .tw-cl{font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
 .tw-bg{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 .tw-bc{display:flex;flex-direction:column;gap:4px}
@@ -153,8 +156,10 @@ button.tw-a{font-size:13px;padding:7px 8px;border-radius:var(--border-radius-md)
 button.tw-a:hover{background:var(--color-background-secondary)}
 button.tw-a:active{transform:scale(.98)}
 button.tw-a .tw-ac{font-size:10px;color:var(--color-text-tertiary);display:block;font-family:var(--font-mono)}
-button.tw-a.hl{border-color:var(--color-border-info);background:var(--color-background-info)}
+button.tw-a.hl{border-color:var(--color-border-info);background:var(--color-background-info);box-shadow:0 0 0 2px var(--color-border-info);font-weight:600}
 button.tw-a.hl .tw-ac{color:var(--color-text-info)}
+button.tw-a.sel{border-color:var(--color-text-success);background:var(--color-background-success);font-weight:600}
+button.tw-a.sel .tw-ac{color:var(--color-text-success)}
 .tw-kh{font-size:11px;color:var(--color-text-tertiary);margin-top:8px;text-align:right}
 .tw-sr{margin-top:12px;text-align:center}
 .tw-sb{font-size:14px;padding:10px 24px;border-radius:var(--border-radius-md);border:none;background:var(--color-border-info);color:#fff;cursor:pointer;font-weight:500}
@@ -223,7 +228,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
   <div id="tw-cel" class="tw-cel" style="display:none"></div>
   <div id="tw-card"></div>
   <div class="tw-bg">
-    <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-a" onclick="TW.decide('a')"><span class="tw-ac">a</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
+    <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"><span class="tw-ac">ag</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
     <div class="tw-bc"><div class="tw-cl">Handle now</div><button class="tw-a" id="btn-do" onclick="TW.decide('do')"><span class="tw-ac">do</span>Do now</button><button class="tw-a" id="btn-de" onclick="TW.decide('de')"><span class="tw-ac">de</span>Delegate</button><button class="tw-a" id="btn-wa" onclick="TW.decide('wa')"><span class="tw-ac">wa</span>Waiting</button></div>
     <div class="tw-bc"><div class="tw-cl">Defer</div><button class="tw-a" id="btn-su" onclick="TW.decide('su')"><span class="tw-ac">su</span>Sunsama</button><button class="tw-a" id="btn-df" onclick="TW.decide('df')"><span class="tw-ac">df</span>Defer</button><button class="tw-a" id="btn-un" onclick="TW.decide('un')"><span class="tw-ac">un</span>Undecided</button></div>
     <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">sk</span>Skip</button></div>
@@ -247,6 +252,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     /* --- Helpers --- */
     const $ = (id) => document.getElementById(id);
+    // Human labels for the inline decision echo (#196). Keyed by decisionKey.
+    const DEC_LABELS = { ag: "Agree", cu: "Custom", st: "Stop", sk: "Skip", do: "Do now", de: "Delegate", wa: "Waiting", su: "Sunsama", df: "Defer", un: "Undecided", pa: "PARA folder", ar: "Triage dump" };
 
     function renderDots() {
       const c = $("tw-dots");
@@ -297,18 +304,33 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       if (e.bodyPreview) h += '<div class="tw-body">' + e.bodyPreview + "</div>";
       if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + e.attachment + "</span></div>";
       if (e.sentNotice) h += '<div class="tw-sent">📤 ' + e.sentNotice + "</div>";
-      h += '<hr class="tw-hr"><div style="display:flex;align-items:flex-start;gap:10px"><span class="tw-badge ' + e.badgeClass + '">' + e.badgeLabel + '</span><div style="flex:1;min-width:0">';
-      h += '<div class="tw-reason">' + e.reason + "</div>";
-      if (e.suggestedPath) h += '<div class="tw-spath">→ ' + e.suggestedPath + "</div>";
-      if (e.annotation) h += '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px">' + e.annotation + "</div>";
+      // #183: distinguish "Stage 2 saw it, no suggestion" from a blank card.
+      const hasSug = !!e.suggestedAction;
+      const badgeLabel = hasSug ? e.badgeLabel : "none";
+      h += '<hr class="tw-hr"><div style="display:flex;align-items:flex-start;gap:10px"><span class="tw-badge ' + e.badgeClass + '">' + badgeLabel + '</span><div style="flex:1;min-width:0">';
+      if (hasSug) {
+        h += '<div class="tw-reason">' + e.reason + "</div>";
+        if (e.suggestedPath) h += '<div class="tw-spath">→ ' + e.suggestedPath + "</div>";
+        if (e.annotation) h += '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px">' + e.annotation + "</div>";
+      } else {
+        h += '<div class="tw-reason tw-nosug">no Stage 2 suggestion</div>';
+      }
+      // #196: echo the operator's own decision inline, right after the suggestion
+      // text — where the eye already is — not only in the top-right corner tag.
+      if (decisions[cur]) {
+        const dk = decisions[cur].decisionKey;
+        h += '<div class="tw-ydec">✓ Your decision: ' + (DEC_LABELS[dk] || dk) + ' <span class="tw-ac">' + dk + "</span></div>";
+      }
       h += "</div>"; // close reason block
       h += '<button class="tw-iaff" onclick="TW.toggleDetails()" aria-label="Toggle details">' + (detailsOpen ? "close" : "details") + '<span class="tw-ac">i</span></button>';
       h += "</div></div>"; // close pill row + tw-card
       if (detailsOpen) h += buildDetails(e);
       $("tw-card").innerHTML = h;
-      document.querySelectorAll("button.tw-a").forEach((b) => b.classList.remove("hl"));
+      document.querySelectorAll("button.tw-a").forEach((b) => { b.classList.remove("hl"); b.classList.remove("sel"); });
       const sb = $("btn-" + e.suggestedAction);
       if (sb) sb.classList.add("hl");
+      // #196: mark the operator's own decided action distinctly from the .hl suggestion.
+      if (decisions[cur]) { const db = $("btn-" + decisions[cur].decisionKey); if (db) db.classList.add("sel"); }
       $("tw-prev").disabled = cur === pb.start;
       $("tw-next").disabled = cur === pb.end - 1;
       $("tw-ppage").disabled = curPage === 0;
@@ -522,7 +544,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     /* --- Decision envelope (S42 locked shape) --- */
     // Emits { emailId, decisionKey, timestamp, action, user_typed_params, suggestion }.
-    // decisionKey = key pressed; action = same except for "a" (agree), where action and
+    // decisionKey = key pressed; action = same except for "ag" (agree), where action and
     // params are copied from the Stage 2 suggestion. suggestion is echoed verbatim from the
     // input bridge (emails[cur].suggestion), or null if the calling skill passed none.
     function buildDecision(code, params) {
@@ -530,8 +552,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       const sug = e.suggestion || null;
       let action = code;
       let utp = params || {};
-      if (code === "a") { // agree: accept Stage 2 suggestion verbatim
-        action = (sug && sug.action) || e.suggestedAction || "a";
+      if (code === "ag") { // agree: accept Stage 2 suggestion verbatim
+        action = (sug && sug.action) || e.suggestedAction || "ag";
         utp = (sug && sug.parameterisation) ? Object.assign({}, sug.parameterisation) : {};
       }
       if (code === "sk") { action = "keep"; } // skip: no-action, carrier leaves it in place (NOOP_ACTIONS)
@@ -740,7 +762,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       if (e.key === "i") { e.preventDefault(); window.TW.toggleDetails(); return; } // S40: open/close details
       if (e.key === "ArrowLeft") { e.preventDefault(); window.TW.go(-1); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); window.TW.go(1); return; }
-      const map = { a: "a", cu: "cu", st: "st", sk: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", ar: "ar" };
+      const map = { ag: "ag", cu: "cu", st: "st", sk: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", ar: "ar" };
       const buf = window._kbBuf || "", cand = buf + e.key;
       if (map[cand]) { e.preventDefault(); window._kbBuf = ""; window.TW.decide(map[cand]); return; }
       if ("acdwusp".includes(e.key.toLowerCase())) { window._kbBuf = e.key; setTimeout(() => { if (window._kbBuf === e.key) window._kbBuf = ""; }, 600); } else window._kbBuf = "";
