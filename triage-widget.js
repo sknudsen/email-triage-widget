@@ -88,7 +88,6 @@
     const pageCount = Math.max(1, Math.ceil(emails.length / PAGE_SIZE));
     let curPage = 0;
     let stopped = false;       // Stop ends the sitting (terminal screen)
-    let celebration = "";      // last celebration quote, shown after a submit
     const submittedPages = {}; // page index -> true once its batch is submitted
     function pageBounds(p) {
       const start = p * PAGE_SIZE;
@@ -103,6 +102,13 @@
 
     /* --- State --- */
     let cur = 0;
+    // #21: completion card. A display-only 14th slot per page, reachable only once
+    // every card on the page is decided. It is NOT an email (never enters
+    // `decisions`, never emitted in a batch, never a dot), so the drain's per-page
+    // row logic and the "N / N decided" counters ignore it. Pre-submit it confirms
+    // the page is complete and points at Submit; post-submit it celebrates. Back-nav
+    // to the decided cards stays available (it is not a terminal overlay).
+    let showCompletion = false;
     const decisions = emails.map(() => null);
     let detailsOpen = false; // S40 details panel: sticky across navigation
     let activePanel = null,
@@ -144,8 +150,9 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-body{font-size:12px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 0;white-space:pre-line;overflow:hidden;display:-webkit-box;-webkit-line-clamp:7;-webkit-box-orient:vertical}
 .tw-spath{font-size:11px;color:var(--color-text-tertiary);font-family:var(--font-mono,monospace);margin-top:2px}
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
-.tw-thr{font-size:12px;color:var(--color-text-info);margin-bottom:6px}
-.tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);margin-left:auto}
+.tw-thr{font-size:12px;color:var(--color-text-info);margin-bottom:6px;min-height:18px}
+.tw-meta{display:grid;grid-template-columns:auto 1fr auto;column-gap:8px;row-gap:4px;align-items:baseline;margin-bottom:4px}
+.tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);justify-self:end}
 .tw-ydec{font-size:12px;font-weight:600;color:var(--color-text-success);margin-top:6px;display:flex;align-items:center;gap:6px}
 .tw-ydec .tw-ac{font-size:10px;color:var(--color-text-success);font-family:var(--font-mono)}
 .tw-nosug{font-style:italic;color:var(--color-text-tertiary)}
@@ -165,12 +172,15 @@ button.tw-a.sel .tw-ac{color:var(--color-text-success)}
 .tw-sb{font-size:14px;padding:10px 24px;border-radius:var(--border-radius-md);border:none;background:var(--color-border-info);color:#fff;cursor:pointer;font-weight:500}
 .tw-sb:disabled{opacity:.3;cursor:default}
 .tw-sb:hover:not(:disabled){opacity:.85}
-.tw-cel{margin:4px 0 10px;padding:8px 12px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);font-size:13px;font-style:italic;text-align:center}
 .tw-stopbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:10px;padding:8px 12px;border-radius:var(--border-radius-md);background:var(--color-background-warning);color:var(--color-text-warning);font-size:13px}
 .tw-done{padding:2rem 1rem;text-align:center}
 .tw-done-h{font-size:20px;font-weight:600;color:var(--color-text-primary);margin-bottom:8px}
 .tw-done-s{font-size:13px;color:var(--color-text-secondary);margin-bottom:14px}
 .tw-quote{font-size:14px;font-style:italic;color:var(--color-text-success);max-width:34rem;margin:0 auto}
+.tw-ccard{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:10px}
+.tw-cc-h{font-size:18px;font-weight:600;color:var(--color-text-success)}
+.tw-cc-s{font-size:13px;color:var(--color-text-secondary);max-width:32rem;line-height:1.5}
+.tw-ccard .tw-quote{font-size:17px;margin-top:4px}
 .tw-pnl{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1rem 1.25rem;margin-top:6px}
 .tw-pt{font-size:13px;font-weight:500;margin-bottom:10px;color:var(--color-text-primary)}
 .tw-pg{display:grid;grid-template-columns:1fr 1fr}
@@ -225,7 +235,6 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 <div style="padding:.5rem 0">
   <div class="tw-bar"><span class="tw-lbl" id="tw-page">Page 1 of 1</span><div class="tw-dots" id="tw-dots"></div><span class="tw-lbl" id="tw-dc">0 / 0 decided</span></div>
   <div class="tw-nav"><button class="tw-nbtn" id="tw-ppage" onclick="TW.goPage(-1)">◀ Page</button><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)">← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)">Next →</button><button class="tw-nbtn" id="tw-npage" onclick="TW.goPage(1)">Page ▶</button></div>
-  <div id="tw-cel" class="tw-cel" style="display:none"></div>
   <div id="tw-card"></div>
   <div class="tw-bg">
     <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"><span class="tw-ac">ag</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
@@ -247,7 +256,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
   <div id="tw-dep" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-de-tgt" placeholder="Delegate to… (required)"/><button class="tw-cb" onclick="TW.confirmDelegate()">Delegate</button></div><div class="tw-req" id="tw-de-hint">Required — enter a delegate.</div></div></div>
   <div id="tw-cup" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-cu-note" placeholder="Custom note… (required)"/><button class="tw-cb" onclick="TW.confirmCustom()">Save</button></div><div class="tw-req" id="tw-cu-hint">Required — enter a note.</div></div></div>
   <div id="tw-stopbar" class="tw-stopbar" style="display:none"><span id="tw-stopmsg"></span><button class="tw-cb" id="tw-stopok" onclick="TW.confirmStop()">Confirm stop</button><button class="tw-nbtn" onclick="TW.cancelStop()">Cancel</button></div>
-  <div class="tw-sr"><span class="tw-lbl" id="tw-gp"></span><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit page</button></div>
+  <div class="tw-sr"><span class="tw-lbl" id="tw-gp"></span><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit page</button><button class="tw-sb" id="tw-nextpage" style="display:none" onclick="TW.goPage(1)">Next page →</button></div>
 </div>`;
 
     /* --- Helpers --- */
@@ -262,7 +271,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       for (let i = b.start; i < b.end; i++) {
         const d = document.createElement("span");
         d.className = "tw-dot" + (decisions[i] ? " decided" : "") + (i === cur ? " current" : "");
-        d.onclick = (function (idx) { return function () { cur = idx; render(); }; })(i);
+        d.onclick = (function (idx) { return function () { showCompletion = false; cur = idx; render(); }; })(i);
         c.appendChild(d);
       }
       const pageTotal = b.end - b.start;
@@ -281,6 +290,12 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     function render() {
       closeAll();
+      if (showCompletion) { renderCompletion(); return; } // #21
+      // Action grid + keyboard hint are inert on the completion card; restore them
+      // here so a normal render always shows them (idempotent).
+      const bg = document.querySelector(".tw-bg"); if (bg) bg.style.display = "";
+      const kh = document.querySelector(".tw-kh"); if (kh) kh.style.display = "";
+      $("tw-sub").style.display = ""; $("tw-nextpage").style.display = "none";
       const e = emails[cur];
       const pb = pageBounds(curPage);
       let h = '<div class="tw-card' + (detailsOpen ? " open" : "") + '">';
@@ -296,22 +311,29 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         }
         if (inCar > 0) thr = (thr ? thr + ", " : "") + inCar + " in this carousel";
       }
-      if (thr) h += '<div class="tw-thr">🔗 ' + thr + "</div>";
-      h += '<div class="tw-mr"><span class="tw-k">From</span><span class="tw-v">' + e.sender + "</span>";
-      if (decisions[cur]) h += '<span class="tw-dtag">✓ ' + decisions[cur].decisionKey.toUpperCase() + "</span>";
-      h += '</div><div class="tw-mr"><span class="tw-k">Date</span><span class="tw-v">' + e.date + "</span></div>";
-      h += '<div class="tw-subj">' + e.subject + "</div>";
-      if (e.bodyPreview) h += '<div class="tw-body">' + e.bodyPreview + "</div>";
-      if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + e.attachment + "</span></div>";
-      if (e.sentNotice) h += '<div class="tw-sent">📤 ' + e.sentNotice + "</div>";
+      // #263: always emit the thread-ref row (empty when absent) so cards with and
+      // without a thread are the same height — no reflow when navigating. The row
+      // reserves a line via .tw-thr min-height. #266: thr is HTML-escaped.
+      h += '<div class="tw-thr">' + (thr ? "🔗 " + escHtml(thr) : "") + "</div>";
+      // #18: From/Date as one aligned label·value·tag grid (.tw-meta). The decision
+      // tag sits in its own grid column, so it can never collapse "From" against the
+      // sender (the old .tw-mr space-between + margin-left:auto bug). #266: every
+      // email-derived string is HTML-escaped before it reaches innerHTML.
+      h += '<div class="tw-meta"><span class="tw-k">From</span><span class="tw-v">' + escHtml(e.sender) + "</span>";
+      h += decisions[cur] ? '<span class="tw-dtag">✓ ' + escHtml(decisions[cur].decisionKey.toUpperCase()) + "</span>" : "<span></span>";
+      h += '<span class="tw-k">Date</span><span class="tw-v">' + escHtml(e.date) + "</span><span></span></div>";
+      h += '<div class="tw-subj">' + escHtml(e.subject) + "</div>";
+      if (e.bodyPreview) h += '<div class="tw-body">' + escHtml(e.bodyPreview) + "</div>";
+      if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + escHtml(e.attachment) + "</span></div>";
+      if (e.sentNotice) h += '<div class="tw-sent">📤 ' + escHtml(e.sentNotice) + "</div>";
       // #183: distinguish "Stage 2 saw it, no suggestion" from a blank card.
       const hasSug = !!e.suggestedAction;
       const badgeLabel = hasSug ? e.badgeLabel : "none";
       h += '<hr class="tw-hr"><div style="display:flex;align-items:flex-start;gap:10px"><span class="tw-badge ' + e.badgeClass + '">' + badgeLabel + '</span><div style="flex:1;min-width:0">';
       if (hasSug) {
-        h += '<div class="tw-reason">' + e.reason + "</div>";
-        if (e.suggestedPath) h += '<div class="tw-spath">→ ' + e.suggestedPath + "</div>";
-        if (e.annotation) h += '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px">' + e.annotation + "</div>";
+        h += '<div class="tw-reason">' + escHtml(e.reason) + "</div>";
+        if (e.suggestedPath) h += '<div class="tw-spath">→ ' + escHtml(e.suggestedPath) + "</div>";
+        if (e.annotation) h += '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px">' + escHtml(e.annotation) + "</div>";
       } else {
         h += '<div class="tw-reason tw-nosug">no Stage 2 suggestion</div>';
       }
@@ -337,10 +359,59 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       $("tw-npage").disabled = curPage >= pageCount - 1;
       $("tw-pos").textContent = (cur - pb.start + 1) + " of " + (pb.end - pb.start);
       $("tw-page").textContent = "Page " + (curPage + 1) + " of " + pageCount;
-      const cel = $("tw-cel");
-      if (celebration) { cel.textContent = "🎉 " + celebration; cel.style.display = "block"; }
-      else { cel.style.display = "none"; }
       renderDots();
+    }
+
+    /* Completion card (#21) — a display-only slot one step past the last email of
+       a fully-decided page. Pre-submit it confirms "all N decided" and points at
+       Submit. Post-submit it becomes the celebration card: the sitting pauses here
+       on EVERY page (no auto-advance), giving the operator a breath before they
+       step to the next page with Page ▶. The action grid + keyboard hint are hidden
+       so the only forward affordance is Submit / Page ▶; ← Prev returns to the
+       decided cards (no back-nav trap). */
+    function renderCompletion() {
+      const b = pageBounds(curPage);
+      const total = b.end - b.start;
+      const submitted = submittedPages[curPage];
+      const last = pageCount - 1;
+      let h = '<div class="tw-card tw-ccard">';
+      if (submitted) {
+        const q = pickQuote();
+        const allSubmitted = Object.keys(submittedPages).length === pageCount;
+        const hasNext = curPage < last;
+        h += '<div class="tw-cc-h">' + (allSubmitted ? "🎉 Inbox zero" : "🎉 Page submitted") + "</div>";
+        h += '<div class="tw-cc-s">All ' + total + " decision" + (total !== 1 ? "s" : "") + " on this page are in.</div>";
+        h += '<div class="tw-cc-s">' +
+          (allSubmitted
+            ? "That was the last page — inbox zero for this sitting."
+            : (hasNext
+              ? "Take a breath — Next page when you're ready."
+              : "Use ◀ Page to finish the remaining pages.")) +
+          "</div>";
+        if (q) h += '<div class="tw-quote">' + escHtml(q) + "</div>";
+      } else {
+        h += '<div class="tw-cc-h">✓ All ' + total + " decided</div>";
+        h += '<div class="tw-cc-s">Every card on this page has a decision. Review with ← Prev, or submit the page below.</div>';
+      }
+      h += "</div>";
+      $("tw-card").innerHTML = h;
+      const bg = document.querySelector(".tw-bg"); if (bg) bg.style.display = "none";
+      const kh = document.querySelector(".tw-kh"); if (kh) kh.style.display = "none";
+      document.querySelectorAll("button.tw-a").forEach((bn) => { bn.classList.remove("hl"); bn.classList.remove("sel"); });
+      $("tw-prev").disabled = false;       // ← Prev returns to the decided cards
+      $("tw-next").disabled = true;        // nothing past the completion card
+      $("tw-ppage").disabled = curPage === 0;
+      $("tw-npage").disabled = curPage >= pageCount - 1;
+      $("tw-pos").textContent = "✓ complete";
+      $("tw-page").textContent = "Page " + (curPage + 1) + " of " + pageCount;
+      renderDots();
+      // Footer affordance: a submitted page with a next page swaps the (now inert)
+      // Submit button for a primary "Next page →" in the same spot — visible
+      // forwarding + Enter-to-advance (#21 review). Pre-submit / last page keep
+      // the Submit button (renderDots drives its enabled/submitted state).
+      const showNext = submitted && curPage < last;
+      $("tw-nextpage").style.display = showNext ? "" : "none";
+      $("tw-sub").style.display = showNext ? "none" : "";
     }
 
     /* Terminal screen after Stop — the sitting is over; reopening the artifact
@@ -362,6 +433,10 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       const b = pageBounds(curPage);
       for (let i = cur + 1; i < b.end; i++) { if (!decisions[i]) { cur = i; render(); return; } }
       for (let i = b.start; i < cur; i++) { if (!decisions[i]) { cur = i; render(); return; } }
+      // No undecided card left on the page — surface the completion card (#21) as
+      // the "you've finished this page" signal, instead of silently re-rendering
+      // the last card with nothing to do next.
+      if (pageDecidedCount(curPage) === (b.end - b.start)) showCompletion = true;
       render();
     }
 
@@ -603,11 +678,23 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     /* --- Public API (attached to window.TW) --- */
     window.TW = {
-      go(delta) { const b = pageBounds(curPage); const n = cur + delta; if (n >= b.start && n < b.end) { cur = n; render(); } },
+      go(delta) {
+        const b = pageBounds(curPage);
+        if (showCompletion) { // on the completion card: ← Prev returns to the last card; Next stays
+          if (delta < 0) { showCompletion = false; cur = b.end - 1; render(); }
+          return;
+        }
+        const n = cur + delta;
+        if (n >= b.start && n < b.end) { cur = n; render(); return; }
+        // Stepping forward past the last card of a fully-decided page reveals the
+        // completion card (#21) — the hidden-until-complete forward affordance.
+        if (delta > 0 && n === b.end && pageDecidedCount(curPage) === (b.end - b.start)) { showCompletion = true; render(); }
+      },
 
       goPage(delta) {
         const p = curPage + delta;
         if (p < 0 || p >= pageCount) return;
+        showCompletion = false;
         curPage = p;
         cur = pageBounds(p).start;
         render();
@@ -618,6 +705,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
       decide(code) {
         if (code === "st") { window.TW.stop(); return; } // Stop = flush + end the sitting
+        if (showCompletion) return; // action grid is inert on the completion card (#21)
         if (stopped || submittedPages[curPage]) return; // page submitted / sitting stopped — locked
         if (code === "pa") { togglePanel("tw-pap"); return; }
         if (code === "df" || code === "wa") { openWaitDefer(code); return; }
@@ -703,9 +791,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
       submit() {
         // Per-page append-only submit (#214): emit ONLY the current page's
-        // decided rows as their own batch, lock the page, advance to the next.
-        // Each batch becomes its own immutable decisions-<stamp>/batch-*.json,
-        // so a page finished before the artifact dies is never lost.
+        // decided rows as their own batch and lock the page. Each batch becomes
+        // its own immutable decisions-<stamp>/batch-*.json, so a page finished
+        // before the artifact dies is never lost.
         if (stopped || submittedPages[curPage]) return;
         const b = pageBounds(curPage);
         const out = [], ids = [];
@@ -714,11 +802,11 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         sendPrompt("batch:" + JSON.stringify(out));
         submittedPages[curPage] = true;
         persistSubmitted(ids); // remember for resume — skip on next open (no 404)
-        const allDone = Object.keys(submittedPages).length === pageCount;
-        // Celebrate the batch (the v1 widget showed a quote after a batch of 13).
-        const q = pickQuote();
-        celebration = allDone ? ("Inbox zero!" + (q ? " " + q : "")) : (q || "Batch done.");
-        if (!allDone && curPage < pageCount - 1) { curPage += 1; cur = pageBounds(curPage).start; }
+        // Stay on the page's celebration card — a deliberate pause between pages.
+        // The operator steps to the next page with Page ▶ (goPage), which clears
+        // showCompletion. No auto-advance, no separate banner (the card carries
+        // the quote). The terminal "all submitted" state is reflected by the card.
+        showCompletion = true;
         render();
       },
     };
@@ -756,6 +844,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         }
       }
       if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+      // Completion card: Enter advances to the next page once this page is
+      // submitted — the keyboard twin of the footer "Next page →" button (#21).
+      if (showCompletion && e.key === "Enter" && submittedPages[curPage] && curPage < pageCount - 1) { e.preventDefault(); window.TW.goPage(1); return; }
       const sbar = $("tw-stopbar");
       if (e.key === "Escape" && sbar && sbar.style.display !== "none") { window.TW.cancelStop(); return; }
       if (e.key === "Escape" && activePanel) { closeAll(); return; }

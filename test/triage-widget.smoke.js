@@ -299,7 +299,16 @@ ok("page 0 submit enabled after 13 decided", $g("tw-sub").disabled === false);
 lastPrompt = null;
 window.TW.submit();
 ok("page 0 submit emits exactly 13 rows", !!lastPrompt && JSON.parse(lastPrompt.slice(6)).length === 13);
-ok("auto-advanced to page 2 after submit", $g("tw-page").textContent === "Page 2 of 2");
+// No auto-advance — the celebration card holds on page 1 until Page ▶ (the breath).
+ok("stays on page 1 after submit (celebration card, no auto-advance)", $g("tw-page").textContent === "Page 1 of 2" && !!document.querySelector(".tw-ccard"));
+ok("post-submit card invites the operator to the next page", /Next page/.test(document.querySelector(".tw-ccard").textContent));
+ok("Page ▶ enabled on the celebration card", $g("tw-npage").disabled === false);
+// Footer swaps Submit for a primary "Next page →" on a submitted intermediate page.
+ok("footer shows Next page button, Submit hidden", $g("tw-nextpage").style.display !== "none" && $g("tw-sub").style.display === "none");
+// Enter advances (keyboard twin of the button).
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+ok("Enter on submitted celebration card advances to page 2", $g("tw-page").textContent === "Page 2 of 2");
+ok("page 2 normal card restores Submit, hides Next page", $g("tw-sub").style.display === "" && $g("tw-nextpage").style.display === "none");
 ok("page 2 has 2 dots", document.querySelectorAll(".tw-dot").length === 2);
 ok("page 2 submit disabled (none decided)", $g("tw-sub").disabled === true);
 
@@ -313,6 +322,8 @@ ok("page 2 submit enabled after both decided", $g("tw-sub").disabled === false);
 lastPrompt = null;
 window.TW.submit();
 ok("page 2 submit emits exactly 2 rows", !!lastPrompt && JSON.parse(lastPrompt.slice(6)).length === 2);
+ok("final submit shows inbox-zero celebration card", /Inbox zero/.test(document.querySelector(".tw-ccard").textContent));
+ok("last page has no Next page button (Submit shown instead)", $g("tw-nextpage").style.display === "none" && $g("tw-sub").style.display === "");
 
 // Revisiting a submitted page shows it locked.
 window.TW.goPage(-1);
@@ -329,12 +340,13 @@ function mkS(n) { const a = []; for (let i = 0; i < n; i++) a.push(mkP(i)); retu
 // 20 emails -> 2 pages (13 + 7), WITH a stamp so resume persistence is active.
 window.initTriage({ stamp: STAMP, batch: 1, total: 20, emails: mkS(20), tree, quotes });
 ok("fresh session renders 13 dots on page 0", document.querySelectorAll(".tw-dot").length === 13);
-// Decide + submit page 0 -> celebration quote shown, ids persisted.
+// Decide + submit page 0 -> celebration card carries the quote (banner removed), ids persisted.
 for (let k = 0; k < 13; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
 window.TW.submit();
-ok("celebration banner shown after submit", $g("tw-cel").style.display === "block" && $g("tw-cel").textContent.indexOf("🎉") === 0);
-ok("celebration uses a baked quote", quotes.some((q) => $g("tw-cel").textContent.indexOf(q) !== -1));
-// On page 1 (7 cards), decide 3 then STOP. Stop is two-step (confirm bar).
+ok("celebration card shown after submit (no banner element)", !!document.querySelector(".tw-ccard") && document.getElementById("tw-cel") === null);
+ok("celebration card carries a baked quote", quotes.some((q) => document.querySelector(".tw-ccard").textContent.indexOf(q) !== -1));
+// Step to page 1 with Page ▶ (no auto-advance), decide 3, then STOP. Stop is two-step.
+window.TW.goPage(1);
 for (let k = 0; k < 3; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
 lastPrompt = null;
 window.TW.stop();
@@ -356,7 +368,7 @@ ok("missed-first: page opens on E16 (first un-submitted)", /S16/.test(document.g
 // Finish the 4, submit -> inbox zero. Reopen -> done terminal.
 for (let k = 0; k < 4; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
 window.TW.submit();
-ok("inbox-zero celebration on final submit", $g("tw-cel").textContent.indexOf("Inbox zero") !== -1);
+ok("inbox-zero celebration card on final submit", /Inbox zero/.test(document.querySelector(".tw-ccard").textContent));
 window.initTriage({ stamp: STAMP, batch: 1, total: 20, emails: mkS(20), tree, quotes });
 ok("reopen after all done -> inbox-zero terminal", /Inbox zero/.test(document.getElementById("tw-root").textContent) && !document.getElementById("tw-card"));
 try { window.localStorage.clear(); } catch (e) {}
@@ -474,6 +486,77 @@ window.initTriage({ batch: 1, total: 1, emails: [noSug], tree });
 ok("#183 no-suggestion card shows the marker text", /no Stage 2 suggestion/.test(document.getElementById("tw-card").textContent));
 ok("#183 marker uses the muted tw-nosug class", !!document.querySelector(".tw-nosug"));
 ok("#183 nothing highlighted when there is no suggested action", document.querySelectorAll("button.tw-a.hl").length === 0);
+
+/* ===== #266 HTML-escape every email-derived string (raw-HTML injection) ===== */
+console.log("\n== #266 HTML-escape email-derived strings ==");
+const xss = { id: "X1", sender: "<b>e</b>vil@x.dk", date: "Mon <09:00>", subject: "<img src=x onerror=alert(1)>hi",
+  bodyPreview: "<script>alert('p')</script> body & stuff", attachment: "<i>a</i>.pdf", sentNotice: "<u>sent</u>",
+  badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
+  suggestedPath: "<x>/path", reason: "<reason> & more", annotation: "<note>", threadRef: "<3> others",
+  suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [xss], tree, deferSubfolders });
+ok("#266 no <img> element injected from subject", document.querySelector("#tw-card img") === null);
+ok("#266 no <script> element injected from bodyPreview", document.querySelector("#tw-card script") === null);
+ok("#266 no <b> element injected from sender", document.querySelector(".tw-meta b") === null);
+ok("#266 bodyPreview survives as escaped text (not markup)", document.querySelector(".tw-body").textContent.includes("<script>alert('p')</script>"));
+ok("#266 subject survives as escaped text", document.querySelector(".tw-subj").textContent.includes("<img src=x onerror=alert(1)>hi"));
+ok("#266 threadRef survives as escaped text", document.querySelector(".tw-thr").textContent.includes("<3> others"));
+ok("#266 reason survives as escaped text", document.querySelector(".tw-reason").textContent.includes("<reason> & more"));
+ok("#266 card innerHTML carries escaped entity (&lt;script&gt;)", document.getElementById("tw-card").innerHTML.includes("&lt;script&gt;"));
+
+/* ===== #18 From/Date aligned grid; decision tag in its own column ===== */
+console.log("\n== #18 From/Date aligned grid, tag in own column ==");
+const STYLE = document.querySelector("style").textContent;
+ok("#18 .tw-meta is a grid (no space-between header)", STYLE.includes(".tw-meta{display:grid"));
+ok("#18 .tw-dtag no longer uses margin-left:auto", !/\.tw-dtag\{[^}]*margin-left:auto/.test(STYLE));
+ok("#18 .tw-dtag sits in its own grid column (justify-self:end)", /\.tw-dtag\{[^}]*justify-self:end/.test(STYLE));
+window.initTriage({ batch: 1, total: 2, emails: [mkP(0), mkP(1)], tree });
+ok("#18 header rendered as .tw-meta grid", !!document.querySelector(".tw-meta"));
+ok("#18 From + Date labels both present", (() => { const ks = [...document.querySelectorAll(".tw-meta .tw-k")].map((k) => k.textContent); return ks.includes("From") && ks.includes("Date"); })());
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("ar");                                   // decide E0, cursor advances to E1
+document.querySelectorAll(".tw-dot")[0].onclick();        // back to the decided E0
+ok("#18 decided card renders .tw-dtag inside the grid", !!document.querySelector(".tw-meta .tw-dtag"));
+ok("#18 From label still present alongside the tag (not collapsed)", [...document.querySelectorAll(".tw-meta .tw-k")].some((k) => k.textContent === "From"));
+
+/* ===== #263 thread-ref row reserves stable space ===== */
+console.log("\n== #263 thread-ref row reserves space ==");
+ok("#263 .tw-thr carries a min-height floor", /\.tw-thr\{[^}]*min-height/.test(STYLE));
+const noThr = { id: "NT", sender: "a@x.dk", date: "Mon", subject: "no thread",
+  bodyPreview: "x", attachment: null, sentNotice: null, badgeLabel: "Defer", badgeClass: "badge-df",
+  suggestedAction: "df", suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [noThr], tree });
+ok("#263 .tw-thr present even when threadRef is null (no reflow)", !!document.querySelector(".tw-thr"));
+ok("#263 empty thread row carries no link glyph", document.querySelector(".tw-thr").textContent.indexOf("🔗") === -1);
+
+/* ===== #21 completion card after the last decided card ===== */
+console.log("\n== #21 completion-signal card ==");
+// Gate: not reachable until the page is fully decided.
+window.initTriage({ batch: 1, total: 2, emails: [mkP(0), mkP(1)], tree });
+ok("#21 no completion card on a fresh page", !document.querySelector(".tw-ccard"));
+document.querySelectorAll(".tw-dot")[0].onclick(); window.TW.decide("ar"); // E0 decided -> advance to E1
+document.querySelectorAll(".tw-dot")[1].onclick();                          // sit on E1 (undecided)
+window.TW.go(1);
+ok("#21 completion gated while a card is still undecided", !document.querySelector(".tw-ccard"));
+// Single page, decide all -> completion card surfaces as the done signal.
+window.initTriage({ batch: 1, total: 3, emails: [mkP(0), mkP(1), mkP(2)], tree });
+for (let k = 0; k < 3; k++) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
+ok("#21 completion card shown once every card decided", !!document.querySelector(".tw-ccard"));
+ok("#21 position reads complete", document.getElementById("tw-pos").textContent === "✓ complete");
+ok("#21 action grid hidden on the completion card", document.querySelector(".tw-bg").style.display === "none");
+ok("#21 dots count only the 3 emails (card 14 is not a dot)", document.querySelectorAll(".tw-dot").length === 3);
+ok("#21 counter still reads 3 / 3 (completion card excluded)", document.getElementById("tw-dc").textContent === "3 / 3 decided");
+ok("#21 submit enabled on the completion card", document.getElementById("tw-sub").disabled === false);
+ok("#21 keyboard/decide inert on completion card (no re-decide)", (() => { window.TW.decide("do"); return document.querySelector(".tw-ccard") && /3 \/ 3/.test(document.getElementById("tw-dc").textContent); })());
+window.TW.go(-1);
+ok("#21 Prev leaves completion back to a real card (no trap)", !document.querySelector(".tw-ccard") && !!document.querySelector(".tw-meta"));
+window.TW.go(1);
+ok("#21 forward re-reaches the completion card", !!document.querySelector(".tw-ccard"));
+lastPrompt = null;
+window.TW.submit();
+ok("#21 submit from completion emits the 3-row batch", !!lastPrompt && lastPrompt.startsWith("batch:") && JSON.parse(lastPrompt.slice(6)).length === 3);
+ok("#21 post-submit completion card celebrates (inbox zero)", /inbox zero/i.test(document.querySelector(".tw-ccard").textContent));
+ok("#21 action grid restored after navigating back to a card", (() => { document.querySelectorAll(".tw-dot")[0].onclick(); return document.querySelector(".tw-bg").style.display === ""; })());
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
