@@ -230,10 +230,12 @@ ok("7 rows emitted (all decided)", rows.length === 7, "got " + rows.length);
 
 const byId = Object.fromEntries(rows.map((r) => [r.emailId, r]));
 ok("CCC decisionKey=do action=do params={}", byId.CCC.decisionKey === "do" && byId.CCC.action === "do" && Object.keys(byId.CCC.user_typed_params).length === 0);
-ok("CCC carries suggestion", byId.CCC.suggestion && byId.CCC.suggestion.emailId === "CCC");
+ok("CCC envelope carries no suggestion payload (#242)", !("suggestion" in byId.CCC));
+ok("CCC paramsEdited=false (direct key, nothing pre-filled)", byId.CCC.paramsEdited === false);
 ok("AAA agree -> decisionKey=ag action=pa", byId.AAA.decisionKey === "ag" && byId.AAA.action === "pa");
 ok("AAA agree copies suggestion.parameterisation.destination", byId.AAA.user_typed_params.destination === ".PARA-work/1_Current_projects/Atlas");
 ok("AAA params is a copy, not same ref", byId.AAA.user_typed_params !== emails[0].suggestion.parameterisation);
+ok("AAA agree paramsEdited=false (accept = verbatim)", byId.AAA.paramsEdited === false);
 ok("BBB decisionKey=pa with destination", byId.BBB.decisionKey === "pa" && typeof byId.BBB.user_typed_params.destination === "string");
 ok("AAA agree carries Stage 2 folderState verbatim (exists_in_outlook)", byId.AAA.user_typed_params.folderState === "exists_in_outlook");
 ok("BBB override of unmarked leaf defaults to exists_in_onedrive", byId.BBB.user_typed_params.folderState === "exists_in_onedrive");
@@ -242,13 +244,16 @@ ok("GGG confirmNew stamps proposed", byId.GGG.decisionKey === "pa" && byId.GGG.u
 ok("DDD decisionKey=df contextNote set", byId.DDD.decisionKey === "df" && byId.DDD.user_typed_params.contextNote === "chase next week");
 ok("DDD df has no thresholdDate key (empty field omitted)", !("thresholdDate" in byId.DDD.user_typed_params));
 ok("DDD df none-picked omits destination (carrier → flat Inbox/Defer) (#243)", !("destination" in byId.DDD.user_typed_params));
-ok("DDD suggestion is null (omission case)", byId.DDD.suggestion === null);
+ok("DDD envelope carries no suggestion payload (#242)", !("suggestion" in byId.DDD));
+ok("DDD paramsEdited=false (no pre-filled field touched via input)", byId.DDD.paramsEdited === false);
 ok("EEE final decisionKey=wa action=wa", byId.EEE.decisionKey === "wa" && byId.EEE.action === "wa");
 ok("EEE wa carries pre-filled contextNote + thresholdDate", byId.EEE.user_typed_params.contextNote === "vendor to confirm pricing" && byId.EEE.user_typed_params.thresholdDate === "2026-06-20");
 ok("EEE final overwrote transient de/cu (only wa remains)", byId.EEE.user_typed_params.delegationTarget === undefined && byId.EEE.user_typed_params.note === undefined);
-ok("every row has the 6 envelope keys + ISO timestamp", rows.every((r) =>
-  ["emailId","decisionKey","timestamp","action","user_typed_params","suggestion"].every((k) => k in r) &&
+ok("EEE paramsEdited=true (edited a pre-filled field, #242)", byId.EEE.paramsEdited === true);
+ok("every row has the 6 envelope keys + ISO timestamp (#242: paramsEdited, not suggestion)", rows.every((r) =>
+  ["emailId","decisionKey","timestamp","action","user_typed_params","paramsEdited"].every((k) => k in r) &&
   /^\d{4}-\d{2}-\d{2}T/.test(r.timestamp)));
+ok("no row carries a suggestion payload (#242 anti-masquerade)", rows.every((r) => !("suggestion" in r)));
 
 console.log("== page locked after submit (#214) ==");
 lastPrompt = null;
@@ -475,6 +480,33 @@ lastPrompt = null; window.TW.submit();
 const kbById = Object.fromEntries(JSON.parse(lastPrompt.slice(6)).map((r) => [r.emailId, r]));
 ok("#195 a→r row carries decisionKey=ar", kbById.E0.decisionKey === "ar");
 ok("#195 a→g row carries decisionKey=ag (agree)", kbById.E1.decisionKey === "ag");
+
+/* ===== #242 ar contract destination materialised on accept; override never inherits ===== */
+console.log("\n== #242 ar destination baked (accept) vs override (no inherit) ==");
+const arAccept = { id: "ARA", sender: "a@x.dk", date: "Mon", subject: "Archive me",
+  bodyPreview: "", attachment: null, sentNotice: null, badgeLabel: "Triage dump",
+  badgeClass: "badge-ar", suggestedAction: "ar", suggestedPath: null, reason: "",
+  annotation: null, threadRef: null,
+  suggestion: makeSuggestion("ARA", "ar", { destination: ".PARA-personal/4_Archive/0_Inbox_trash" }) };
+const arOverride = { id: "ARO", sender: "b@x.dk", date: "Mon", subject: "Override to archive",
+  bodyPreview: "", attachment: null, sentNotice: null, badgeLabel: "PARA folder",
+  badgeClass: "badge-pa", suggestedAction: "pa", suggestedPath: ".PARA-work/2_Areas/Tatiana",
+  reason: "", annotation: null, threadRef: null,
+  suggestion: makeSuggestion("ARO", "pa", { destination: ".PARA-work/2_Areas/Tatiana" }) };
+window.initTriage({ batch: 1, total: 2, emails: [arAccept, arOverride], tree });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("ar"); // accept the ar suggestion -> bake the contract destination
+document.querySelectorAll(".tw-dot")[1].onclick();
+window.TW.decide("ar"); // override a pa suggestion to ar -> must NOT bake the pa leaf (#258)
+lastPrompt = null; window.TW.submit();
+const arById = Object.fromEntries(JSON.parse(lastPrompt.slice(6)).map((r) => [r.emailId, r]));
+ok("#242 ar accept bakes the contract destination into user_typed_params",
+  arById.ARA.user_typed_params.destination === ".PARA-personal/4_Archive/0_Inbox_trash");
+ok("#242 ar accept carries no suggestion payload", !("suggestion" in arById.ARA));
+ok("#242 ar accept paramsEdited=false (contract not editable)", arById.ARA.paramsEdited === false);
+ok("#242 ar OVERRIDE of a pa suggestion does NOT bake the pa destination (#258)",
+  !("destination" in arById.ARO.user_typed_params));
+ok("#242 ar override carries no suggestion payload", !("suggestion" in arById.ARO));
 
 /* ===== #183 empty-state for a no-suggestion card (suggestedAction null) ===== */
 console.log("\n== #183 no-suggestion empty state ==");

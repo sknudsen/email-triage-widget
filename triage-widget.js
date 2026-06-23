@@ -114,6 +114,8 @@
     let activePanel = null,
       wdAction = null, // 'wa' | 'df' — which action opened the shared wait/defer panel
       dfDest = null,   // df picker: chosen subfolder path, or null = none → Inbox/Defer (#243)
+      dfPrefill = null, // df picker: the subfolder Stage 2 pre-filled (edit-vs-accept baseline, #242)
+      wdEdited = false, // wait/defer: did the operator touch a pre-filled field? (#242 edit-vs-accept)
       dfFocus = 0,     // df picker: index of the keyboard-focused grid cell (#243)
       fCol = 0,
       fSec = 0,
@@ -549,6 +551,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     function clearPf(id) { // operator edited a pre-filled field → it's now typed
       $(id).classList.remove("tw-pf");
       const hint = $(id + "-pf"); if (hint) hint.style.display = "none";
+      wdEdited = true; // #242: editing a pre-filled field flips the row to "edited"
     }
     /* --- Defer-subfolder picker (#243) -------------------------------------
      * Lives inside the shared wait/defer fold-out, shown only for df. Mirrors
@@ -593,6 +596,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       const el = cells[idx];
       if (!el) return;
       dfDest = el.dataset.path === "" ? null : el.dataset.path; // "" → none → Inbox/Defer
+      if (dfDest !== dfPrefill) wdEdited = true; // #242: picking a non-pre-filled subfolder is an edit
       dfFocus = idx;
       cells.forEach((c, j) => c.classList.toggle("sel", j === idx));
       dfSetFocus(idx);
@@ -603,7 +607,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       togglePanel("tw-wdp");
       if (activePanel !== "tw-wdp") return; // toggled closed
       wdAction = code;
-      dfDest = null; dfFocus = 0;
+      dfDest = null; dfFocus = 0; dfPrefill = null; wdEdited = false; // #242: fresh edit-vs-accept baseline
       $("tw-wd-title").textContent = code === "wa" ? "Waiting for" : "Defer";
       const p = (emails[cur].suggestion && emails[cur].suggestion.parameterisation) || {};
       prefillField("tw-wd-note", p.contextNote);
@@ -618,7 +622,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         const items = dfItems();
         if (p.destination) {
           const k = items.findIndex((it) => it.path === p.destination);
-          if (k >= 0) { dfDest = items[k].path; dfFocus = k; }
+          if (k >= 0) { dfDest = items[k].path; dfFocus = k; dfPrefill = items[k].path; }
         }
         buildDeferGrid();
         setTimeout(() => { try { $("tw-dfsgrid").querySelectorAll(".tw-ti")[dfFocus].focus(); } catch (e) {} }, 50);
@@ -627,19 +631,46 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       }
     }
 
-    /* --- Decision envelope (S42 locked shape) --- */
-    // Emits { emailId, decisionKey, timestamp, action, user_typed_params, suggestion }.
-    // decisionKey = key pressed; action = same except for "ag" (agree), where action and
-    // params are copied from the Stage 2 suggestion. suggestion is echoed verbatim from the
-    // input bridge (emails[cur].suggestion), or null if the calling skill passed none.
-    function buildDecision(code, params) {
+    /* --- Decision envelope (S42 locked shape, #242 Direction B) --------------
+     * Emits { emailId, decisionKey, timestamp, action, user_typed_params,
+     * paramsEdited }. The Stage 2 `suggestion` payload no longer crosses the
+     * boundary (#242): whatever is selected here is what gets consumed
+     * downstream, so the row is the complete, self-sufficient decision and the
+     * carrier resolves nothing from the suggestion. Anything downstream that
+     * needs Stage 2's record re-reads suggestions-<stamp>.json by emailId.
+     *
+     * The widget MATERIALISES the operator's selection into the row (the
+     * "widget dumb" lock S44–49 is retired, consciously):
+     *   - decisionKey = key pressed; action = same except for "ag" (agree),
+     *     where action + params are materialised from the Stage 2 suggestion
+     *     (submitting "ag" selects "consume Stage 2's proposal").
+     *   - "ar" destination is a Stage 2 *contract* (the operator can't edit it):
+     *     bake it into the row ONLY when the suggestion's own action is "ar"
+     *     (accept). An ar-OVERRIDE of a non-ar suggestion must NOT inherit that
+     *     suggestion's destination (#258) — leave utp empty and let the carrier
+     *     use its archive fallback. The widget only ever bakes the destination
+     *     matching the *selected* action.
+     *   - paramsEdited = the edit-vs-accept signal, stamped at submit. The
+     *     widget knows whether the operator touched a pre-filled field, so it
+     *     records it directly (S46's downstream diff against
+     *     suggestion.parameterisation is gone with the echo).
+     */
+    function buildDecision(code, params, edited) {
       const e = emails[cur];
       const sug = e.suggestion || null;
       let action = code;
       let utp = params || {};
-      if (code === "ag") { // agree: accept Stage 2 suggestion verbatim
+      let paramsEdited = !!edited;
+      if (code === "ag") { // agree: materialise the Stage 2 suggestion (accept = select)
         action = (sug && sug.action) || e.suggestedAction || "ag";
         utp = (sug && sug.parameterisation) ? Object.assign({}, sug.parameterisation) : {};
+        paramsEdited = false; // agree accepts verbatim — nothing edited
+      }
+      if (code === "ar") { // archive: bake the contract destination only on accept (sug was ar)
+        if (sug && sug.action === "ar" && sug.parameterisation && sug.parameterisation.destination) {
+          utp = Object.assign({}, utp, { destination: sug.parameterisation.destination });
+        }
+        paramsEdited = false; // ar destination is a contract; not operator-editable
       }
       if (code === "sk") { action = "keep"; } // skip: no-action, carrier leaves it in place (NOOP_ACTIONS)
       return {
@@ -648,7 +679,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         timestamp: new Date().toISOString(),
         action: action,
         user_typed_params: utp,
-        suggestion: sug,
+        paramsEdited: paramsEdited,
       };
     }
 
@@ -774,9 +805,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         // it so the carrier falls back to flat Inbox/Defer (#243). wa never sets
         // it (always Inbox/Waiting).
         if (wdAction === "df" && dfDest) utp.destination = dfDest;
-        decisions[cur] = buildDecision(wdAction || "df", utp);
+        decisions[cur] = buildDecision(wdAction || "df", utp, wdEdited); // #242: stamp edit-vs-accept
         $("tw-wd-note").value = ""; $("tw-wd-date").value = "";
-        dfDest = null; dfFocus = 0;
+        dfDest = null; dfFocus = 0; dfPrefill = null; wdEdited = false;
         closeAll();
         advance();
       },
