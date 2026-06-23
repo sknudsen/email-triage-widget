@@ -558,5 +558,38 @@ ok("#21 submit from completion emits the 3-row batch", !!lastPrompt && lastPromp
 ok("#21 post-submit completion card celebrates (inbox zero)", /inbox zero/i.test(document.querySelector(".tw-ccard").textContent));
 ok("#21 action grid restored after navigating back to a card", (() => { document.querySelectorAll(".tw-dot")[0].onclick(); return document.querySelector(".tw-bg").style.display === ""; })());
 
+/* ===== #270 From shows sender name AND address (producer senderAddress) ===== */
+console.log("\n== #270 From: name + address ==");
+ok("#270 .tw-vaddr muted-address style present", STYLE.includes(".tw-vaddr{display:block"));
+const named = { id: "NM", sender: "Jonas Holm", senderAddress: "jonas@x.dk", date: "Mon", subject: "s",
+  bodyPreview: "b", badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
+  suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [named], tree });
+ok("#270 display name rendered in the From value", document.querySelector(".tw-meta .tw-v").textContent.includes("Jonas Holm"));
+ok("#270 address rendered as a second muted line", !!document.querySelector(".tw-vaddr") && document.querySelector(".tw-vaddr").textContent === "jonas@x.dk");
+
+// address equals the display name (no envelope name) -> no duplicate second line
+const noName = { id: "NN", sender: "jonas@x.dk", senderAddress: "jonas@x.dk", date: "Mon", subject: "s",
+  bodyPreview: "b", badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
+  suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [noName], tree });
+ok("#270 no second line when address equals display name", document.querySelector(".tw-vaddr") === null);
+
+// absent senderAddress -> single-string fallback (back-compat with pre-#270 payloads)
+const noAddr = { id: "NA", sender: "team@x.dk", date: "Mon", subject: "s",
+  bodyPreview: "b", badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
+  suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [noAddr], tree });
+ok("#270 degrades to single From string when senderAddress absent",
+  document.querySelector(".tw-vaddr") === null && document.querySelector(".tw-meta .tw-v").textContent.includes("team@x.dk"));
+
+// #266: a hostile address must be escaped, never injected as markup
+const evilAddr = { id: "EA", sender: "Mallory", senderAddress: "<b>x</b>@x.dk", date: "Mon", subject: "s",
+  bodyPreview: "b", badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
+  suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [evilAddr], tree });
+ok("#270 senderAddress is HTML-escaped (#266)",
+  document.querySelector(".tw-vaddr b") === null && document.querySelector(".tw-vaddr").textContent.includes("<b>x</b>@x.dk"));
+
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);

@@ -152,6 +152,7 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
 .tw-thr{font-size:12px;color:var(--color-text-info);margin-bottom:6px;min-height:18px}
 .tw-meta{display:grid;grid-template-columns:auto 1fr auto;column-gap:8px;row-gap:4px;align-items:baseline;margin-bottom:4px}
+.tw-vaddr{display:block;font-size:11px;font-weight:400;color:var(--color-text-tertiary)}
 .tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);justify-self:end}
 .tw-ydec{font-size:12px;font-weight:600;color:var(--color-text-success);margin-top:6px;display:flex;align-items:center;gap:6px}
 .tw-ydec .tw-ac{font-size:10px;color:var(--color-text-success);font-family:var(--font-mono)}
@@ -319,7 +320,16 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // tag sits in its own grid column, so it can never collapse "From" against the
       // sender (the old .tw-mr space-between + margin-left:auto bug). #266: every
       // email-derived string is HTML-escaped before it reaches innerHTML.
-      h += '<div class="tw-meta"><span class="tw-k">From</span><span class="tw-v">' + escHtml(e.sender) + "</span>";
+      // #270 (refs #18): show the sender display name AND the raw address. The
+      // address renders as a second muted line inside the From value cell, but
+      // only when it's present AND differs from the display name (when the
+      // envelope had no name, sender already IS the address — no double line).
+      // #266: both strings HTML-escaped before innerHTML.
+      var fromVal = escHtml(e.sender);
+      if (e.senderAddress && e.senderAddress !== e.sender) {
+        fromVal += '<span class="tw-vaddr">' + escHtml(e.senderAddress) + "</span>";
+      }
+      h += '<div class="tw-meta"><span class="tw-k">From</span><span class="tw-v">' + fromVal + "</span>";
       h += decisions[cur] ? '<span class="tw-dtag">✓ ' + escHtml(decisions[cur].decisionKey.toUpperCase()) + "</span>" : "<span></span>";
       h += '<span class="tw-k">Date</span><span class="tw-v">' + escHtml(e.date) + "</span><span></span></div>";
       h += '<div class="tw-subj">' + escHtml(e.subject) + "</div>";
