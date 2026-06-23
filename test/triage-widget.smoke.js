@@ -265,7 +265,8 @@ ok("#196 inline decision echo present on a decided card", !!document.querySelect
 ok("#196 echo names the decision (Agree)", /Agree/.test(document.querySelector(".tw-ydec").textContent));
 ok("#196 decided action button gets .sel (btn-ag)", document.getElementById("btn-ag").classList.contains("sel"));
 ok("#195 agree button is btn-ag, old single-char btn-a gone", !!document.getElementById("btn-ag") && !document.getElementById("btn-a"));
-ok("#263 .tw-card carries a min-height floor", document.querySelector("style").textContent.includes("min-height:248px"));
+ok("#263 .tw-card carries a min-height floor", document.querySelector("style").textContent.includes("min-height:320px"));
+ok("#265 .tw-body line-clamp raised to 7", document.querySelector("style").textContent.includes("-webkit-line-clamp:7"));
 
 /* ===== Multi-page paging scenario (#214): 15 emails -> 2 pages (13 + 2) ===== */
 console.log("\n== multi-page paging (#214) ==");
