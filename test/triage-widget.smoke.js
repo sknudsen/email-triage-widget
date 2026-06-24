@@ -268,6 +268,10 @@ console.log("== #196 inline decision echo + .sel · #263 min-height · #195 ag b
 // cur is on AAA (decided via Agree -> decisionKey "ag") from the dot click above.
 ok("#196 inline decision echo present on a decided card", !!document.querySelector(".tw-ydec"));
 ok("#196 echo names the decision (Agree)", /Agree/.test(document.querySelector(".tw-ydec").textContent));
+// #196: AAA decided via Agree materialises the Stage 2 pa suggestion, whose
+// destination is .PARA-work/1_Current_projects/Atlas — the echo must surface it.
+ok("#196 echo carries the resolved destination (ag -> pa dest)",
+  document.querySelector(".tw-ydest") && document.querySelector(".tw-ydest").textContent.includes(".PARA-work/1_Current_projects/Atlas"));
 ok("#196 decided action button gets .sel (btn-ag)", document.getElementById("btn-ag").classList.contains("sel"));
 ok("#195 agree button is btn-ag, old single-char btn-a gone", !!document.getElementById("btn-ag") && !document.getElementById("btn-a"));
 ok("#263 .tw-card carries a min-height floor", document.querySelector("style").textContent.includes("min-height:320px"));
@@ -622,6 +626,76 @@ const evilAddr = { id: "EA", sender: "Mallory", senderAddress: "<b>x</b>@x.dk", 
 window.initTriage({ batch: 1, total: 1, emails: [evilAddr], tree });
 ok("#270 senderAddress is HTML-escaped (#266)",
   document.querySelector(".tw-vaddr b") === null && document.querySelector(".tw-vaddr").textContent.includes("<b>x</b>@x.dk"));
+
+/* ===== #196 resolved destination in the echo (fixed folders + escaping) ===== */
+console.log("\n== #196 decision-echo destination ==");
+// A direct "do" press resolves to the fixed triage folder Inbox/Do_now.
+const doCard = { id: "DO", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  badgeLabel: "Do now", badgeClass: "badge-do", suggestedAction: "do", suggestedPath: null,
+  reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [doCard], tree });
+window.TW.decide("do");
+document.querySelectorAll(".tw-dot")[0].onclick();  // deciding the only card jumps to completion; return to it
+ok("#196 fixed-folder action resolves to Inbox/Do_now in the echo",
+  document.querySelector(".tw-ydest") && document.querySelector(".tw-ydest").textContent.includes("Inbox/Do_now"));
+
+// Skip (sk -> keep) has no destination — the echo shows no arrow/path.
+const skCard = { id: "SK", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  badgeLabel: "Triage dump", badgeClass: "badge-ar", suggestedAction: "ar", suggestedPath: null,
+  reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [skCard], tree });
+window.TW.decide("sk");
+document.querySelectorAll(".tw-dot")[0].onclick();  // return to the decided card
+ok("#196 keep/skip card has the echo but no destination arrow",
+  !!document.querySelector(".tw-ydec") && document.querySelector(".tw-ydest") === null);
+
+// suggestion line still shows the SUGGESTED path (not the decided destination).
+const sugCard = { id: "SG", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa",
+  suggestedPath: ".PARA-work/1_Current_projects/Atlas", reason: "r", annotation: null,
+  threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [sugCard], tree });
+ok("#196 suggestion line still shows suggestedPath (not the decided dest)",
+  document.querySelector(".tw-spath") && document.querySelector(".tw-spath").textContent.includes(".PARA-work/1_Current_projects/Atlas"));
+
+// #266: a hostile typed destination must be escaped in the echo, never injected.
+const evilDest = { id: "ED", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa", suggestedPath: null,
+  reason: "r", annotation: null, threadRef: null,
+  suggestion: makeSuggestion("ED", "pa", { destination: "<b>x</b>/Hack" }) };
+window.initTriage({ batch: 1, total: 1, emails: [evilDest], tree });
+window.TW.decide("ag");
+document.querySelectorAll(".tw-dot")[0].onclick();  // return from completion card to the decided card
+ok("#196 echo destination is HTML-escaped (#266)",
+  document.querySelector(".tw-ydest b") === null && document.querySelector(".tw-ydest").textContent.includes("<b>x</b>/Hack"));
+
+/* ===== #14 current folder on the card face ===== */
+console.log("\n== #14 current folder on card ==");
+const cfCard = { id: "CF", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  currentFolder: "Inbox/Defer/Defer_eboks", badgeLabel: "Defer", badgeClass: "badge-df",
+  suggestedAction: "df", suggestedPath: null, reason: "r", annotation: null, threadRef: null,
+  suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [cfCard], tree });
+ok("#14 current folder rendered on the card (.tw-cfv)",
+  document.querySelector(".tw-cfv") && document.querySelector(".tw-cfv").textContent.includes("Inbox/Defer/Defer_eboks"));
+ok("#14 current folder sits in the From/Date meta grid",
+  !!document.querySelector(".tw-meta .tw-cfv"));
+
+// degrades cleanly when currentFolder is absent — no Folder row.
+const noCf = { id: "NC", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df", suggestedPath: null,
+  reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [noCf], tree });
+ok("#14 no Folder row when currentFolder absent", document.querySelector(".tw-cfv") === null);
+
+// #266: a hostile currentFolder must be escaped.
+const evilCf = { id: "EC", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  currentFolder: "<b>x</b>/Folder", badgeLabel: "Defer", badgeClass: "badge-df",
+  suggestedAction: "df", suggestedPath: null, reason: "r", annotation: null, threadRef: null,
+  suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [evilCf], tree });
+ok("#14 currentFolder is HTML-escaped (#266)",
+  document.querySelector(".tw-cfv b") === null && document.querySelector(".tw-cfv").textContent.includes("<b>x</b>/Folder"));
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);

@@ -158,6 +158,8 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);justify-self:end}
 .tw-ydec{font-size:12px;font-weight:600;color:var(--color-text-success);margin-top:6px;display:flex;align-items:center;gap:6px}
 .tw-ydec .tw-ac{font-size:10px;color:var(--color-text-success);font-family:var(--font-mono)}
+.tw-ydec .tw-ydest{font-family:var(--font-mono,monospace);font-weight:500}
+.tw-meta .tw-cfv{font-family:var(--font-mono,monospace);font-size:11px;color:var(--color-text-tertiary)}
 .tw-nosug{font-style:italic;color:var(--color-text-tertiary)}
 .tw-cl{font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
 .tw-bg{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
@@ -266,6 +268,22 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     const $ = (id) => document.getElementById(id);
     // Human labels for the inline decision echo (#196). Keyed by decisionKey.
     const DEC_LABELS = { ag: "Agree", cu: "Custom", st: "Stop", sk: "Skip", do: "Do now", de: "Delegate", wa: "Waiting", su: "Sunsama", df: "Defer", un: "Undecided", pa: "PARA folder", ar: "Triage dump" };
+    // #196: the fixed triage folder each action files into when no operator-typed
+    // destination overrides it. Mirror (NOT import) of carrier.py
+    // TRIAGE_FOLDER_DEST + SUNSAMA_FOLDER_DEST — re-implemented here for the
+    // inline decision echo so the widget stays standalone (no cross-package
+    // import). pa / df-with-subfolder / ar-on-accept carry their own
+    // user_typed_params.destination (baked at submit, #242 B); do/wa/un/de/su and
+    // flat df resolve here; keep/cu/sk and ag-without-a-dest resolve to nothing.
+    const TRIAGE_DEST = { do: "Inbox/Do_now", wa: "Inbox/Waiting", df: "Inbox/Defer", de: "Inbox/Delegate", un: "Inbox/Undecided", su: "Inbox/Sunsama_task" };
+    // Resolve the destination to show in the echo: the operator-typed/baked
+    // destination first (pa/df-subfolder/ar-accept; for "ag" the materialised
+    // action's params), else the action's fixed triage folder, else null.
+    function decisionDest(d) {
+      const utp = d.user_typed_params || {};
+      if (utp.destination) return utp.destination;
+      return TRIAGE_DEST[d.action] || null;
+    }
 
     function renderDots() {
       const c = $("tw-dots");
@@ -333,7 +351,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       }
       h += '<div class="tw-meta"><span class="tw-k">From</span><span class="tw-v">' + fromVal + "</span>";
       h += decisions[cur] ? '<span class="tw-dtag">✓ ' + escHtml(decisions[cur].decisionKey.toUpperCase()) + "</span>" : "<span></span>";
-      h += '<span class="tw-k">Date</span><span class="tw-v">' + escHtml(e.date) + "</span><span></span></div>";
+      h += '<span class="tw-k">Date</span><span class="tw-v">' + escHtml(e.date) + "</span><span></span>";
+      // #14: show the email's current folder on the card face (its own meta row),
+      // so the operator sees where it lives now without opening details. The
+      // producer emits currentFolder from the Stage 1 snapshot's
+      // currentFolder.path; the row is omitted when absent. #266: escaped.
+      if (e.currentFolder) h += '<span class="tw-k">Folder</span><span class="tw-v tw-cfv">' + escHtml(e.currentFolder) + "</span><span></span>";
+      h += "</div>";
       h += '<div class="tw-subj">' + escHtml(e.subject) + "</div>";
       if (e.bodyPreview) h += '<div class="tw-body">' + escHtml(e.bodyPreview) + "</div>";
       if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + escHtml(e.attachment) + "</span></div>";
@@ -353,7 +377,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // text — where the eye already is — not only in the top-right corner tag.
       if (decisions[cur]) {
         const dk = decisions[cur].decisionKey;
-        h += '<div class="tw-ydec">✓ Your decision: ' + (DEC_LABELS[dk] || dk) + ' <span class="tw-ac">' + dk + "</span></div>";
+        // #196: show the resolved decision destination alongside the action, so a
+        // revisited pa/df/ar (and the materialised "ag") card reads where it's
+        // going, not just what was chosen. #266: dest is HTML-escaped.
+        const ddest = decisionDest(decisions[cur]);
+        h += '<div class="tw-ydec">✓ Your decision: ' + (DEC_LABELS[dk] || dk) +
+          (ddest ? ' <span class="tw-ydest">→ ' + escHtml(ddest) + "</span>" : "") +
+          ' <span class="tw-ac">' + dk + "</span></div>";
       }
       h += "</div>"; // close reason block
       h += '<button class="tw-iaff" onclick="TW.toggleDetails()" aria-label="Toggle details">' + (detailsOpen ? "close" : "details") + '<span class="tw-ac">i</span></button>';
