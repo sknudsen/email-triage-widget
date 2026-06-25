@@ -133,10 +133,12 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-dot.decided{background:var(--color-border-info)}
 .tw-dot.current{box-shadow:0 0 0 2px var(--color-border-info)}
 .tw-nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.tw-pgnav{display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:8px}
+.tw-pgnav .tw-lbl{flex:1;text-align:center}
 .tw-nbtn{font-size:13px;padding:5px 12px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer}
 .tw-nbtn:hover{background:var(--color-background-secondary)}
 .tw-nbtn:disabled{opacity:.3;cursor:default}
-.tw-card{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;min-height:320px;margin:0 0 .75rem}
+.tw-card{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;min-height:440px;margin:0 0 .75rem}
 .tw-mr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
 .tw-k{font-size:12px;color:var(--color-text-secondary)}
 .tw-v{font-size:14px;color:var(--color-text-primary)}
@@ -191,13 +193,17 @@ button.tw-a.sel .tw-ac{color:var(--color-text-success)}
 .tw-pg{display:grid;grid-template-columns:1fr 1fr}
 .tw-pc:first-child{padding-right:12px;border-right:.5px solid var(--color-border-tertiary)}
 .tw-pc:last-child{padding-left:12px}
-.tw-tr{font-size:12px;font-weight:500;color:var(--color-text-secondary);padding:4px 0;border-bottom:.5px solid var(--color-border-tertiary);margin-bottom:4px}
+.tw-tr{font-size:12px;font-weight:500;color:var(--color-text-secondary);padding:4px 0;border-bottom:.5px solid var(--color-border-tertiary);margin-bottom:4px;display:flex;justify-content:space-between;align-items:baseline}
+.tw-fshl{font-size:10px;color:var(--color-text-tertiary);font-style:italic;font-weight:400}
 .tw-tsl{font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.05em;padding:6px 4px 3px}
 .tw-ti{font-size:13px;color:var(--color-text-primary);padding:4px 8px;border-radius:var(--border-radius-md);cursor:pointer;display:flex;align-items:center;gap:6px}
 .tw-ti:hover{background:var(--color-background-secondary)}
 .tw-ti.sel{background:var(--color-background-info);color:var(--color-text-info)}
 .tw-ti.foc{box-shadow:0 0 0 2px var(--color-border-info)}
 .tw-ti.nw{font-style:italic}
+.tw-ti-name{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
+.tw-ti-name>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tw-fsdot{width:6px;height:6px;border-radius:50%;background:var(--color-text-tertiary);display:inline-block;flex-shrink:0}
 .tw-ico{font-size:11px;color:var(--color-text-tertiary);flex-shrink:0}
 .tw-nfr{display:flex;gap:6px;margin-top:10px;border-top:.5px solid var(--color-border-tertiary);padding-top:10px;align-items:center}
 .tw-nfr select{font-size:12px;padding:6px 4px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:var(--color-background-primary);color:var(--color-text-primary);cursor:pointer;width:20%}
@@ -239,7 +245,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     root.innerHTML = `
 <div style="padding:.5rem 0">
   <div class="tw-bar"><span class="tw-lbl" id="tw-page">Page 1 of 1</span><div class="tw-dots" id="tw-dots"></div><span class="tw-lbl" id="tw-dc">0 / 0 decided</span></div>
-  <div class="tw-nav"><button class="tw-nbtn" id="tw-ppage" onclick="TW.goPage(-1)">◀ Page</button><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)">← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)">Next →</button><button class="tw-nbtn" id="tw-npage" onclick="TW.goPage(1)">Page ▶</button></div>
+  <div class="tw-nav"><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)">← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)">Next →</button></div>
   <div id="tw-card"></div>
   <div class="tw-bg">
     <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"><span class="tw-ac">ag</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
@@ -261,6 +267,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
   <div id="tw-dep" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-de-tgt" placeholder="Delegate to… (required)"/><button class="tw-cb" onclick="TW.confirmDelegate()">Delegate</button></div><div class="tw-req" id="tw-de-hint">Required — enter a delegate.</div></div></div>
   <div id="tw-cup" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-cu-note" placeholder="Custom note… (required)"/><button class="tw-cb" onclick="TW.confirmCustom()">Save</button></div><div class="tw-req" id="tw-cu-hint">Required — enter a note.</div></div></div>
   <div id="tw-stopbar" class="tw-stopbar" style="display:none"><span id="tw-stopmsg"></span><button class="tw-cb" id="tw-stopok" onclick="TW.confirmStop()">Confirm stop</button><button class="tw-nbtn" onclick="TW.cancelStop()">Cancel</button></div>
+  <div class="tw-pgnav"><button class="tw-nbtn" id="tw-ppage" onclick="TW.goPage(-1)">◀ Page</button><span class="tw-lbl" id="tw-pgcount"></span><button class="tw-nbtn" id="tw-npage" onclick="TW.goPage(1)">Page ▶</button></div>
   <div class="tw-sr"><span class="tw-lbl" id="tw-gp"></span><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit page</button><button class="tw-sb" id="tw-nextpage" style="display:none" onclick="TW.goPage(1)">Next page →</button></div>
 </div>`;
 
@@ -304,8 +311,10 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       $("tw-sub").disabled = done || pageTotal === 0 || pageDecided < pageTotal;
       $("tw-sub").textContent = done ? "Page submitted ✓" : "Submit page";
       const overall = decisions.filter(Boolean).length;
-      $("tw-gp").textContent =
-        overall + " / " + emails.length + " decided overall · " +
+      $("tw-gp").textContent = overall + " / " + emails.length + " decided overall";
+      // #285: the pages-submitted counter lives in the bottom page-nav row,
+      // centered between ◀ Page / Page ▶ (separated from the per-card nav).
+      $("tw-pgcount").textContent =
         Object.keys(submittedPages).length + " of " + pageCount + " pages submitted";
     }
 
@@ -494,7 +503,22 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         const rt = document.createElement("div");
         rt.className = "tw-tr";
         rt.style.cssText = "height:28px;line-height:28px";
-        rt.textContent = data.label;
+        // #281 §B(7): right-aligned column-header state label. "· in OneDrive"
+        // when any leaf in the column is exists_in_onedrive; "· new" when any is
+        // proposed/isNew. exists_in_outlook is the default — no signal. Renders
+        // only when the column carries a non-default leaf, so the operator learns
+        // the dot vocabulary once from the header then scans the dots.
+        let anyOd = false, anyNew = false;
+        data.sections.forEach((its) => its.forEach((it) => {
+          if (!it) return;
+          if (it.isNew || it.folderState === "proposed") anyNew = true;
+          else if (it.folderState === "exists_in_onedrive") anyOd = true;
+        }));
+        const hl = [];
+        if (anyOd) hl.push("· in OneDrive");
+        if (anyNew) hl.push("· new");
+        rt.innerHTML = "<span>" + escHtml(data.label) + "</span>" +
+          (hl.length ? '<span class="tw-fshl">' + hl.join(" ") + "</span>" : "");
         col.appendChild(rt);
         data.sections.forEach((items, si) => {
           const lbl = document.createElement("div");
@@ -506,11 +530,22 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
             const item = items[i], row = document.createElement("div");
             row.style.cssText = "height:28px";
             if (item) {
-              row.className = "tw-ti" + (item.isNew ? " nw" : "");
+              // #281 §B(7): italic name + right-aligned dot when the folder isn't
+              // in Outlook yet (exists_in_onedrive) or is brand-new (proposed/
+              // isNew). exists_in_outlook — and an unmarked leaf — render with no
+              // signal. The widget never invents provenance; it reflects only what
+              // the producer (tree_payload.py) marked. The `.nw` italic, once just
+              // the session-created-folder flag, now generalises to "not in
+              // Outlook yet" per the locked §B(7) note.
+              const isNewLeaf = !!item.isNew || item.folderState === "proposed";
+              const isOnedrive = item.folderState === "exists_in_onedrive";
+              const flagged = isNewLeaf || isOnedrive;
+              row.className = "tw-ti" + (flagged ? " nw" : "");
               const path = data.prefix + "/" + SEC_KEYS[si] + "/" + item.name;
               row.dataset.path = path; row.dataset.col = ci; row.dataset.sec = si; row.dataset.idx = i;
               if (path === preSel) { row.classList.add("sel"); fCol = ci; fSec = si; fIdx = i; }
-              row.innerHTML = '<span class="tw-ico">📁</span>' + item.name;
+              row.innerHTML = '<span class="tw-ti-name"><span class="tw-ico">📁</span><span>' + escHtml(item.name) + "</span></span>" +
+                (flagged ? '<span class="tw-fsdot"></span>' : "");
               row.addEventListener("click", () => selectPara(path, false, item.folderState));
             }
             col.appendChild(row);

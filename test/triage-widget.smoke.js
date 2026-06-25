@@ -274,7 +274,7 @@ ok("#196 echo carries the resolved destination (ag -> pa dest)",
   document.querySelector(".tw-ydest") && document.querySelector(".tw-ydest").textContent.includes(".PARA-work/1_Current_projects/Atlas"));
 ok("#196 decided action button gets .sel (btn-ag)", document.getElementById("btn-ag").classList.contains("sel"));
 ok("#195 agree button is btn-ag, old single-char btn-a gone", !!document.getElementById("btn-ag") && !document.getElementById("btn-a"));
-ok("#263 .tw-card carries a min-height floor", document.querySelector("style").textContent.includes("min-height:320px"));
+ok("#263 .tw-card carries a min-height floor", /\.tw-card\{[^}]*min-height:\d+px/.test(document.querySelector("style").textContent));
 ok("#265 .tw-body line-clamp raised to 7", document.querySelector("style").textContent.includes("-webkit-line-clamp:7"));
 
 /* ===== Multi-page paging scenario (#214): 15 emails -> 2 pages (13 + 2) ===== */
@@ -696,6 +696,47 @@ const evilCf = { id: "EC", sender: "x@x.dk", date: "Mon", subject: "s", bodyPrev
 window.initTriage({ batch: 1, total: 1, emails: [evilCf], tree });
 ok("#14 currentFolder is HTML-escaped (#266)",
   document.querySelector(".tw-cfv b") === null && document.querySelector(".tw-cfv").textContent.includes("<b>x</b>/Folder"));
+
+/* ===== #285 nav split: page-nav row separated from per-card nav ===== */
+console.log("\n== #285 nav split ==");
+window.initTriage({ batch: 1, total: 15, emails: emailsP, tree });
+ok("#285 page-nav row exists (.tw-pgnav)", !!document.querySelector(".tw-pgnav"));
+ok("#285 page buttons live in the page-nav row, not the per-card nav",
+  !!document.querySelector(".tw-pgnav #tw-ppage") && !!document.querySelector(".tw-pgnav #tw-npage") &&
+  !document.querySelector(".tw-nav #tw-ppage") && !document.querySelector(".tw-nav #tw-npage"));
+ok("#285 per-card nav keeps Prev/Next only", !!document.querySelector(".tw-nav #tw-prev") && !!document.querySelector(".tw-nav #tw-next"));
+ok("#285 pages-submitted counter sits in the page-nav row", $g("tw-pgcount").textContent === "0 of 2 pages submitted");
+ok("#285 overall counter no longer duplicates pages-submitted", $g("tw-gp").textContent === "0 / 15 decided overall");
+
+/* ===== #281 §B(7) folderState dot + column-header label ===== */
+console.log("\n== #281 folderState tri-state ==");
+const fsTree = {
+  work: { label: "Work", prefix: ".PARA-work", sections: [
+    [{ name: "OutlookOnly", folderState: "exists_in_outlook" }, { name: "OnedriveOnly", folderState: "exists_in_onedrive" }], [], [], []] },
+  personal: { label: "Personal", prefix: ".PARA-personal", sections: [
+    [{ name: "PlainPersonal" }], [], [], []] },
+};
+const fsEmail = { id: "FS", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+  badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa", suggestedPath: null,
+  reason: "r", annotation: null, threadRef: null, suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [fsEmail], tree: fsTree });
+window.TW.decide("pa");
+const fsOut = document.querySelector('.tw-ti[data-col="0"][data-sec="0"][data-idx="0"]'); // OutlookOnly
+const fsOd = document.querySelector('.tw-ti[data-col="0"][data-sec="0"][data-idx="1"]');  // OnedriveOnly
+ok("#281 onedrive leaf is italic (.nw)", fsOd.classList.contains("nw"));
+ok("#281 onedrive leaf carries a right-aligned dot (.tw-fsdot)", !!fsOd.querySelector(".tw-fsdot"));
+ok("#281 outlook leaf has no italic and no dot", !fsOut.classList.contains("nw") && !fsOut.querySelector(".tw-fsdot"));
+ok("#281 leaf name is wrapped in .tw-ti-name (truncation container)", !!fsOd.querySelector(".tw-ti-name"));
+const fsHeaders = document.querySelectorAll(".tw-tr");
+ok("#281 work column header shows '· in OneDrive'", /in OneDrive/.test(fsHeaders[0].querySelector(".tw-fshl") ? fsHeaders[0].querySelector(".tw-fshl").textContent : ""));
+ok("#281 personal column (no non-default leaf) has no header label", !fsHeaders[1].querySelector(".tw-fshl"));
+ok("#281 folder name is HTML-escaped in the tree (#266)", (() => {
+  const ev = { label: "Work", prefix: ".PARA-work", sections: [[{ name: "<b>x</b>", folderState: "exists_in_onedrive" }], [], [], []] };
+  window.initTriage({ batch: 1, total: 1, emails: [fsEmail], tree: { work: ev, personal: fsTree.personal } });
+  window.TW.decide("pa");
+  const r = document.querySelector('.tw-ti[data-col="0"][data-sec="0"][data-idx="0"]');
+  return !r.querySelector("b") && r.textContent.includes("<b>x</b>");
+})());
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
