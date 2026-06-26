@@ -738,5 +738,68 @@ ok("#281 folder name is HTML-escaped in the tree (#266)", (() => {
   return !r.querySelector("b") && r.textContent.includes("<b>x</b>");
 })());
 
+/* ===== #287 OneDrive-only PARA relevance filter + show-all toggle ===== */
+console.log("\n== #287 paraMatches filter ==");
+const pmTree = {
+  work: { label: "Work", prefix: ".PARA-work", sections: [
+    [{ name: "OutlookA", folderState: "exists_in_outlook" },
+     { name: "OdMatched", folderState: "exists_in_onedrive" },
+     { name: "OdUnmatched", folderState: "exists_in_onedrive" }], [], [], []] },
+  personal: { label: "Personal", prefix: ".PARA-personal", sections: [
+    [{ name: "PlainP" }], [], [], []] },
+};
+const MATCHED = ".PARA-work/1_Current_projects/OdMatched";
+const UNMATCHED = ".PARA-work/1_Current_projects/OdUnmatched";
+const OUTLOOK = ".PARA-work/1_Current_projects/OutlookA";
+function paCell(p) { return document.querySelector('.tw-ti[data-path="' + p + '"]'); }
+function mkPmEmail(paraMatches) {
+  const e = { id: "PM", sender: "x@x.dk", date: "Mon", subject: "s", bodyPreview: "b",
+    badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa", suggestedPath: null,
+    reason: "r", annotation: null, threadRef: null, suggestion: null };
+  if (paraMatches !== undefined) e.paraMatches = paraMatches;
+  return e;
+}
+
+// Filtered view: only the matched OneDrive leaf + all Outlook leaves show.
+window.initTriage({ batch: 1, total: 1, emails: [mkPmEmail([{ path: MATCHED, score: 1.0 }])], tree: pmTree });
+window.TW.decide("pa");
+ok("#287 matched OneDrive leaf is shown", !!paCell(MATCHED));
+ok("#287 unmatched OneDrive leaf is filtered out", !paCell(UNMATCHED));
+ok("#287 Outlook leaf always shown (filter is OneDrive-only)", !!paCell(OUTLOOK));
+ok("#287 matched OneDrive leaf keeps its §B(7) dot", !!paCell(MATCHED).querySelector(".tw-fsdot"));
+ok("#287 status bar visible + names the relevance filter",
+  document.getElementById("tw-pmf").style.display !== "none" && /relevant/i.test($g("tw-pmf").textContent));
+
+// Show-all toggle reveals the unmatched leaf (recall hatch).
+window.TW.togglePm();
+ok("#287 toggle reveals the unmatched OneDrive leaf", !!paCell(UNMATCHED));
+ok("#287 toggle still shows matched + Outlook", !!paCell(MATCHED) && !!paCell(OUTLOOK));
+ok("#287 toggled bar offers 'show only relevant'", /only relevant/i.test($g("tw-pmf").textContent));
+// Toggle back to filtered.
+window.TW.togglePm();
+ok("#287 toggling back re-hides the unmatched leaf", !paCell(UNMATCHED));
+
+// Empty paraMatches: every OneDrive-only leaf hidden, Outlook stays.
+window.initTriage({ batch: 1, total: 1, emails: [mkPmEmail([])], tree: pmTree });
+window.TW.decide("pa");
+ok("#287 empty matches -> no OneDrive leaves", !paCell(MATCHED) && !paCell(UNMATCHED));
+ok("#287 empty matches -> Outlook still shown", !!paCell(OUTLOOK));
+ok("#287 empty matches -> bar reports none matched", /no onedrive/i.test($g("tw-pmf").textContent));
+
+// Back-compat: an email with no paraMatches field shows the full tree, no bar.
+window.initTriage({ batch: 1, total: 1, emails: [mkPmEmail(undefined)], tree: pmTree });
+window.TW.decide("pa");
+ok("#287 no paraMatches field -> show all (back-compat)", !!paCell(MATCHED) && !!paCell(UNMATCHED) && !!paCell(OUTLOOK));
+ok("#287 no paraMatches field -> status bar hidden", document.getElementById("tw-pmf").style.display === "none");
+
+// Heights track what's shown: the filtered column renders fewer rows than the
+// full tree (the #279 jitter guard — no empty filler rows for hidden leaves).
+window.initTriage({ batch: 1, total: 1, emails: [mkPmEmail([{ path: MATCHED, score: 1 }])], tree: pmTree });
+window.TW.decide("pa");
+const filteredLeaves = document.querySelectorAll('#tw-pgrid .tw-ti').length;
+window.TW.togglePm();
+const allLeaves = document.querySelectorAll('#tw-pgrid .tw-ti').length;
+ok("#287 filtered grid renders fewer leaf cells than show-all (height recomputed)", filteredLeaves < allLeaves);
+
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);

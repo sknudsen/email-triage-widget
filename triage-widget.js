@@ -117,6 +117,11 @@
       dfPrefill = null, // df picker: the subfolder Stage 2 pre-filled (edit-vs-accept baseline, #242)
       wdEdited = false, // wait/defer: did the operator touch a pre-filled field? (#242 edit-vs-accept)
       dfFocus = 0,     // df picker: index of the keyboard-focused grid cell (#243)
+      paraShowAll = false, // #287: PARA picker "show all" — false filters OneDrive-only
+                           // leaves to emails[cur].paraMatches; true drops back to the full
+                           // tree (the recall hatch). Reset to false each time the panel opens.
+      viewTree = tree, // #287: the filtered tree buildTree renders + nav reads. Equals `tree`
+                       // until the first buildTree(); rebuilt per open so heights track what's shown.
       fCol = 0,
       fSec = 0,
       fIdx = 0;
@@ -201,6 +206,8 @@ button.tw-a.sel .tw-ac{color:var(--color-text-success)}
 .tw-ti.sel{background:var(--color-background-info);color:var(--color-text-info)}
 .tw-ti.foc{box-shadow:0 0 0 2px var(--color-border-info)}
 .tw-ti.nw{font-style:italic}
+.tw-pmf{font-size:11px;color:var(--color-text-tertiary);margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tw-pmt{color:var(--color-text-info);cursor:pointer;text-decoration:underline;white-space:nowrap}
 .tw-ti-name{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
 .tw-ti-name>span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tw-fsdot{width:6px;height:6px;border-radius:50%;background:var(--color-text-tertiary);display:inline-block;flex-shrink:0}
@@ -254,7 +261,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">sk</span>Skip</button></div>
   </div>
   <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
-  <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pg" id="tw-pgrid"></div>
+  <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pmf" id="tw-pmf"></div><div class="tw-pg" id="tw-pgrid"></div>
     <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" placeholder="New folder name…"/><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div></div></div>
   <div id="tw-wdp" style="display:none"><div class="tw-dfp">
     <div class="tw-pt" id="tw-wd-title">Defer</div>
@@ -492,13 +499,84 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     }
 
     /* --- PARA tree --- */
+
+    // #287: the matched-path set for the current card. `null` means the email
+    // carries no `paraMatches` field at all (a pre-#287 payload) → no filtering,
+    // render the full reference. A Set (possibly empty) means filter OneDrive-only
+    // leaves down to these canonical paths.
+    function paraMatchPaths() {
+      const pm = emails[cur] && emails[cur].paraMatches;
+      if (pm === undefined) return null;
+      return new Set(
+        (pm || [])
+          .map((m) => (typeof m === "string" ? m : m && m.path))
+          .filter(Boolean)
+      );
+    }
+
+    // #287: a filtered copy of `tree`. A OneDrive-only leaf (folderState
+    // "exists_in_onedrive") survives only when `paraShowAll` is on, the email
+    // has no paraMatches field (null set → show all), or its reconstructed path
+    // is in the matched set. Outlook leaves and session-created (isNew/proposed)
+    // leaves are always kept. Sides keep label/prefix so path reconstruction and
+    // the §B(7) header are identical to the unfiltered render. buildTree, nav,
+    // and findNearest all read this so heights + arrow-keys track what's shown.
+    function buildViewTree() {
+      const set = paraMatchPaths();
+      if (paraShowAll || set === null) return tree; // recall hatch / pre-#287 payload
+      const out = {};
+      ["work", "personal"].forEach((side) => {
+        const data = tree[side];
+        out[side] = {
+          label: data.label,
+          prefix: data.prefix,
+          sections: data.sections.map((items, si) =>
+            items.filter((it) => {
+              if (!it) return false;
+              const isNewLeaf = !!it.isNew || it.folderState === "proposed";
+              if (isNewLeaf || it.folderState !== "exists_in_onedrive") return true;
+              const path = data.prefix + "/" + SEC_KEYS[si] + "/" + it.name;
+              return set.has(path); // OneDrive-only: keep iff matched
+            })
+          ),
+        };
+      });
+      return out;
+    }
+
+    // #287: status + recall-toggle line above the grid. Names the filter so the
+    // operator knows the picker is scoped, and offers the "show all PARA" hatch.
+    function renderParaMatchBar() {
+      const bar = $("tw-pmf");
+      if (!bar) return;
+      const set = paraMatchPaths();
+      if (set === null) { bar.innerHTML = ""; bar.style.display = "none"; return; }
+      bar.style.display = "flex";
+      if (paraShowAll) {
+        bar.innerHTML =
+          "<span>Showing all PARA folders.</span>" +
+          '<span class="tw-pmt" onclick="TW.togglePm()">Show only relevant</span>';
+      } else {
+        const n = set.size;
+        const noun = n === 1 ? "OneDrive folder" : "OneDrive folders";
+        const lead = n > 0
+          ? "Showing " + n + " relevant " + noun + " (Outlook folders always shown)."
+          : "No OneDrive folders matched this email (Outlook folders shown).";
+        bar.innerHTML =
+          "<span>" + lead + "</span>" +
+          '<span class="tw-pmt" onclick="TW.togglePm()">Show all PARA</span>';
+      }
+    }
+
     function buildTree() {
       const grid = $("tw-pgrid");
       grid.innerHTML = "";
-      const maxC = SEC_KEYS.map((_, si) => Math.max(tree.work.sections[si].length, tree.personal.sections[si].length));
+      viewTree = buildViewTree();
+      renderParaMatchBar();
+      const maxC = SEC_KEYS.map((_, si) => Math.max(viewTree.work.sections[si].length, viewTree.personal.sections[si].length));
       const preSel = emails[cur].suggestedAction === "pa" ? emails[cur].suggestedPath : "";
       ["work", "personal"].forEach((side, ci) => {
-        const data = tree[side], col = document.createElement("div");
+        const data = viewTree[side], col = document.createElement("div");
         col.className = "tw-pc";
         const rt = document.createElement("div");
         rt.className = "tw-tr";
@@ -563,8 +641,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     }
     function findNearest(col, sec, idx) {
       const side = col === 0 ? "work" : "personal";
-      for (let s = sec; s < 4; s++) { const its = tree[side].sections[s]; const i = s === sec ? Math.min(idx, its.length - 1) : 0; if (its.length > 0 && i >= 0) return { sec: s, idx: i }; }
-      for (let s = sec - 1; s >= 0; s--) { const its = tree[side].sections[s]; if (its.length > 0) return { sec: s, idx: its.length - 1 }; }
+      // #287: read the filtered viewTree so arrow-nav lands only on shown leaves.
+      for (let s = sec; s < 4; s++) { const its = viewTree[side].sections[s]; const i = s === sec ? Math.min(idx, its.length - 1) : 0; if (its.length > 0 && i >= 0) return { sec: s, idx: i }; }
+      for (let s = sec - 1; s >= 0; s--) { const its = viewTree[side].sections[s]; if (its.length > 0) return { sec: s, idx: its.length - 1 }; }
       return null;
     }
 
@@ -593,7 +672,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       activePanel = null;
     }
     function togglePanel(id) {
-      if (activePanel === id) { closeAll(); } else { closeAll(); $(id).style.display = "block"; activePanel = id; if (id === "tw-pap") buildTree(); }
+      if (activePanel === id) { closeAll(); } else { closeAll(); $(id).style.display = "block"; activePanel = id; if (id === "tw-pap") { paraShowAll = false; buildTree(); } }
     }
 
     /* --- Editable-param panels (S46, items 5–9) ----------------------------
@@ -807,6 +886,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       },
 
       toggleDetails() { detailsOpen = !detailsOpen; render(); },
+      // #287: flip the PARA picker between the relevance-filtered view and the
+      // full reference tree (the recall hatch). Re-renders in place.
+      togglePm() { paraShowAll = !paraShowAll; buildTree(); },
       openDetailsFile() { sendPrompt("details:" + emails[cur].id); }, // skill writes <snapshot>/details/<emailId>.md
 
       decide(code) {
@@ -930,8 +1012,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       if (activePanel === "tw-pap") {
         if (document.activeElement === $("tw-nfn")) return;
         const side = fCol === 0 ? "work" : "personal";
-        if (e.key === "ArrowDown") { e.preventDefault(); const its = tree[side].sections[fSec]; if (fIdx + 1 < its.length) { setFocus(fCol, fSec, fIdx + 1); } else { for (let s = fSec + 1; s < 4; s++) { if (tree[side].sections[s].length > 0) { setFocus(fCol, s, 0); break; } } } return; }
-        if (e.key === "ArrowUp") { e.preventDefault(); if (fIdx > 0) { setFocus(fCol, fSec, fIdx - 1); } else { for (let s = fSec - 1; s >= 0; s--) { const its = tree[side].sections[s]; if (its.length > 0) { setFocus(fCol, s, its.length - 1); break; } } } return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); const its = viewTree[side].sections[fSec]; if (fIdx + 1 < its.length) { setFocus(fCol, fSec, fIdx + 1); } else { for (let s = fSec + 1; s < 4; s++) { if (viewTree[side].sections[s].length > 0) { setFocus(fCol, s, 0); break; } } } return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); if (fIdx > 0) { setFocus(fCol, fSec, fIdx - 1); } else { for (let s = fSec - 1; s >= 0; s--) { const its = viewTree[side].sections[s]; if (its.length > 0) { setFocus(fCol, s, its.length - 1); break; } } } return; }
         if (e.key === "ArrowRight" && fCol === 0) { e.preventDefault(); const n = findNearest(1, fSec, fIdx); if (n) setFocus(1, n.sec, n.idx); return; }
         if (e.key === "ArrowLeft" && fCol === 1) { e.preventDefault(); const n = findNearest(0, fSec, fIdx); if (n) setFocus(0, n.sec, n.idx); return; }
         if (e.key === "Enter") { e.preventDefault(); const el = getCell(fCol, fSec, fIdx); if (el) selectPara(el.dataset.path, false); return; }
