@@ -274,8 +274,24 @@ ok("#196 echo carries the resolved destination (ag -> pa dest)",
   document.querySelector(".tw-ydest") && document.querySelector(".tw-ydest").textContent.includes(".PARA-work/1_Current_projects/Atlas"));
 ok("#196 decided action button gets .sel (btn-ag)", document.getElementById("btn-ag").classList.contains("sel"));
 ok("#195 agree button is btn-ag, old single-char btn-a gone", !!document.getElementById("btn-ag") && !document.getElementById("btn-a"));
-ok("#263 .tw-card carries a min-height floor", /\.tw-card\{[^}]*min-height:\d+px/.test(document.querySelector("style").textContent));
-ok("#265 .tw-body line-clamp raised to 7", document.querySelector("style").textContent.includes("-webkit-line-clamp:7"));
+// #290: the S98 440 floor is gone; .tw-card min-height is now a live-tuneable
+// CSS var (stage3-tuning.yaml → cfg.widget) defaulting to 0px = content height.
+ok("#290 .tw-card min-height is var-driven, default 0px",
+  /\.tw-card\{[^}]*min-height:var\(--tw-card-min-h,0px\)/.test(document.querySelector("style").textContent));
+// #290: bodyPreview is scroll-capped via a tuneable var (default 126px) +
+// overflow, replacing the old #265 line-clamp:7 hidden-overflow truncation.
+ok("#290 .tw-body is scroll-capped via var (default 126px) + overflow-y",
+  /\.tw-body\{[^}]*max-height:var\(--tw-body-max-h,126px\)[^}]*overflow-y:auto/.test(document.querySelector("style").textContent));
+ok("#290 old line-clamp truncation removed from .tw-body", !document.querySelector("style").textContent.includes("-webkit-line-clamp:7"));
+// #290: cfg.widget (from stage3-tuning.yaml via assemble_config) applies the
+// render knobs as CSS custom properties on #tw-root.
+window.initTriage({ batch: 1, total: emails.length, emails, tree, widget: { cardMinHeightPx: 400, bodyMaxHeightPx: 90 } });
+ok("#290 cfg.widget.cardMinHeightPx -> --tw-card-min-h on #tw-root",
+  document.getElementById("tw-root").style.getPropertyValue("--tw-card-min-h") === "400px");
+ok("#290 cfg.widget.bodyMaxHeightPx -> --tw-body-max-h on #tw-root",
+  document.getElementById("tw-root").style.getPropertyValue("--tw-body-max-h") === "90px");
+// restore the default (no cfg.widget) render for the scenarios that follow
+window.initTriage({ batch: 1, total: 4, emails, tree, deferSubfolders });
 
 /* ===== Multi-page paging scenario (#214): 15 emails -> 2 pages (13 + 2) ===== */
 console.log("\n== multi-page paging (#214) ==");

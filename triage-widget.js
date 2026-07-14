@@ -48,6 +48,16 @@
     const stamp = cfg.stamp || null;
     const deferSubfolders = (cfg.deferSubfolders && cfg.deferSubfolders.length) ? cfg.deferSubfolders.slice() : [];
     const root = document.getElementById("tw-root");
+    /* #290 render tuning (stage3-tuning.yaml → assemble_config → cfg.widget):
+       apply the card min-height floor + bodyPreview scroll-cap as CSS custom
+       properties that .tw-card / .tw-body read via var(...,default). Absent or
+       partial cfg.widget leaves the CSS defaults (0px floor, 126px body cap). */
+    if (root && cfg.widget) {
+      const cmh = cfg.widget.cardMinHeightPx;
+      if (typeof cmh === "number") root.style.setProperty("--tw-card-min-h", cmh + "px");
+      const bmh = cfg.widget.bodyMaxHeightPx;
+      if (typeof bmh === "number") root.style.setProperty("--tw-body-max-h", bmh + "px");
+    }
     function pickQuote() { return quotes.length ? quotes[Math.floor(Math.random() * quotes.length)] : ""; }
 
     /* --- Resume persistence (Stop / #214). When the config carries a stamp,
@@ -143,7 +153,7 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-nbtn{font-size:13px;padding:5px 12px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer}
 .tw-nbtn:hover{background:var(--color-background-secondary)}
 .tw-nbtn:disabled{opacity:.3;cursor:default}
-.tw-card{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;min-height:440px;margin:0 0 .75rem}
+.tw-card{background:var(--color-background-primary);border:.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:1.25rem;min-height:var(--tw-card-min-h,0px);margin:0 0 .75rem}
 .tw-mr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px}
 .tw-k{font-size:12px;color:var(--color-text-secondary)}
 .tw-v{font-size:14px;color:var(--color-text-primary)}
@@ -156,7 +166,7 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .badge-ar,.badge-df,.badge-wa,.badge-un{background:var(--color-background-secondary);color:var(--color-text-secondary)}
 .badge-de{background:var(--color-background-danger);color:var(--color-text-danger)}
 .tw-reason{font-size:13px;color:var(--color-text-secondary);line-height:1.5}
-.tw-body{font-size:12px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 0;white-space:pre-line;overflow:hidden;display:-webkit-box;-webkit-line-clamp:7;-webkit-box-orient:vertical}
+.tw-body{font-size:12px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 0;white-space:pre-line;max-height:var(--tw-body-max-h,126px);overflow-y:auto}
 .tw-spath{font-size:11px;color:var(--color-text-tertiary);font-family:var(--font-mono,monospace);margin-top:2px}
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
 .tw-thr{font-size:12px;color:var(--color-text-info);margin-bottom:6px;min-height:18px}
