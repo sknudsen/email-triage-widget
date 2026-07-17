@@ -5,7 +5,7 @@
   "description": "Standalone email-triage batch widget for CDN hosting.",
   "license": "MIT",
   "scripts": {
-    "test": "node test/triage-widget.smoke.js"
+    "test": "node test/triage-widget.smoke.js && node test/gate-widget.smoke.js"
   },
   "devDependencies": {
     "jsdom": "^29.1.1"
