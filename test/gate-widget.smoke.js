@@ -34,6 +34,7 @@ const cfg = {
   ],
   counts: { tier1: 8, tier2: 2, tier3: 2 },
   opCount: 4,
+  watch: ["#290 card height — eyeball the triage cards", "refusal path must fire this run"],
 };
 
 const dom = new JSDOM(`<!DOCTYPE html><body><div id="tg-root"></div></body>`,
@@ -63,6 +64,9 @@ ok("create-folder flag surfaced", document.body.textContent.includes("create-fol
 ok("su op shows a channel input", !!document.querySelector('[data-ch="batch-A|3|E4|su"]'));
 ok("non-su op has no channel input", !document.querySelector('[data-ch="batch-A|2|E3|pa"]'));
 ok("Tier-2 confirm starts unchecked", document.getElementById("tg-t2c").checked === false);
+ok("watch block rendered (#326)", !!document.querySelector(".tg-watch"));
+ok("watch item surfaced", document.body.textContent.includes("#290 card height"));
+ok("watch items HTML-escaped path", document.querySelectorAll(".tg-wl li").length === 2);
 
 console.log("== interact ==");
 // Approve the pa op, decline nothing yet; leave su undecided.

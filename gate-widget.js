@@ -57,7 +57,10 @@
     + ".tg-ch input{font:13px inherit;padding:2px 6px;border:1px solid #ccc;border-radius:5px;width:180px}"
     + ".tg-conf{display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:500}"
     + ".tg-submit{margin-top:6px;background:#1a1a1a;color:#fff;border:none;border-radius:7px;padding:9px 18px;cursor:pointer;font-size:14px}"
-    + ".tg-done{background:#eef7f0;border:1px solid #1a7f37;border-radius:8px;padding:14px;color:#0f5323}";
+    + ".tg-done{background:#eef7f0;border:1px solid #1a7f37;border-radius:8px;padding:14px;color:#0f5323}"
+    + ".tg-watch{background:#fff8e6;border:1px solid #e0c56b;border-radius:8px;padding:10px 12px;margin:0 0 14px}"
+    + ".tg-wh{font-weight:600;color:#8a6d00;margin:0 0 6px}"
+    + ".tg-wl{margin:0;padding-left:18px}.tg-wl li{margin:2px 0}";
 
   function initGate(cfg) {
     cfg = cfg || {};
@@ -65,6 +68,7 @@
     var tier2 = cfg.tier2 || [];
     var tier3 = cfg.tier3 || [];
     var tier1Count = cfg.tier1Count || 0;
+    var watch = cfg.watch || []; // operator In-file reminder, display-only (#326)
 
     // State. tier2Confirmed: one block toggle. tier3State: per-op approval +
     // optional channel. Undecided (approved !== true) submits as approved:false.
@@ -112,6 +116,14 @@
 
       var h = '<div class="tg"><div class="tg-h">Grouped-review gate</div>'
         + '<div class="tg-sub">Approve before dispatch. Nothing dispatches without your ok here (#308).</div>';
+
+      // Watch-list — the operator's In-file reminders, surfaced before the
+      // decision (#326). Display-only: eyeball these while approving.
+      if (watch.length) {
+        h += '<div class="tg-watch"><div class="tg-wh">⚠ Watch this run</div><ul class="tg-wl">';
+        watch.forEach(function (w) { h += "<li>" + esc(w) + "</li>"; });
+        h += "</ul></div>";
+      }
 
       // Tier 1 — count only (rides the page "go").
       h += '<div class="tg-sec"><div class="tg-sh">Tier 1 · low-risk</div>'
