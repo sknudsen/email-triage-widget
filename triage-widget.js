@@ -169,7 +169,7 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-body{font-size:12px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 0;white-space:pre-line;max-height:var(--tw-body-max-h,126px);overflow-y:auto}
 .tw-spath{font-size:11px;color:var(--color-text-tertiary);font-family:var(--font-mono,monospace);margin-top:2px}
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
-.tw-thr{font-size:12px;color:var(--color-text-info);margin-bottom:6px;min-height:18px}
+.tw-thc{font-size:12px;font-weight:400;color:var(--color-text-info);margin-left:8px;white-space:nowrap;cursor:help}
 .tw-meta{display:grid;grid-template-columns:auto 1fr auto;column-gap:8px;row-gap:4px;align-items:baseline;margin-bottom:4px}
 .tw-vaddr{display:block;font-size:11px;font-weight:400;color:var(--color-text-tertiary)}
 .tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);justify-self:end}
@@ -350,18 +350,38 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // (`threadRef` — "N other emails in this thread"); the widget appends the
       // page-local part ("X in this carousel"), which only it can know.
       let thr = e.threadRef || "";
+      let inCar = 0;
       const conv = e.metadata && e.metadata.conversationId;
       if (conv) {
-        let inCar = 0;
         for (let i = pb.start; i < pb.end; i++) {
           if (i !== cur && emails[i].metadata && emails[i].metadata.conversationId === conv) inCar++;
         }
         if (inCar > 0) thr = (thr ? thr + ", " : "") + inCar + " in this carousel";
       }
-      // #263: always emit the thread-ref row (empty when absent) so cards with and
-      // without a thread are the same height — no reflow when navigating. The row
-      // reserves a line via .tw-thr min-height. #266: thr is HTML-escaped.
-      h += '<div class="tw-thr">' + (thr ? "🔗 " + escHtml(thr) : "") + "</div>";
+      // #331/2: the thread reference is a chip on the subject line, not its own
+      // row. It used to be a full-width row emitted even when empty — #263
+      // reserved that line so cards with and without a thread stayed the same
+      // height. That reservation is retired here: the S118 calibration render
+      // showed the empty band reads as dead whitespace above From (worth 24px:
+      // 18px min-height + 6px margin, which is exactly the 312→288
+      // cardMinHeightPx drop it allowed), and the #290 floor now does the
+      // height-stability job better without spending a line on every card.
+      //
+      // Label is "🔗 <on this page>/<in the thread>" — the carousel siblings are
+      // the actionable figure (they are in front of you and usually want
+      // deciding together), the run total is the context they sit in. The slash
+      // form only appears when it says something: with no sibling on this page
+      // the chip is the bare run total rather than a puzzling "0/3". The full
+      // sentence stays as hover text.
+      // #266: escaped — escAttr (not escHtml) for the title, since the sentence
+      // goes into an attribute.
+      const thrRun = (typeof e.threadCount === "number" && e.threadCount > 0)
+        ? e.threadCount : 0;
+      const thrLabel = (inCar > 0 && thrRun > 0) ? (inCar + "/" + thrRun)
+        : (thrRun > 0 ? String(thrRun) : (inCar > 0 ? String(inCar) : ""));
+      const thrChip = (thrLabel && thr)
+        ? '<span class="tw-thc" title="' + escAttr(thr) + '">🔗 ' + thrLabel + "</span>"
+        : "";
       // #18: From/Date as one aligned label·value·tag grid (.tw-meta). The decision
       // tag sits in its own grid column, so it can never collapse "From" against the
       // sender (the old .tw-mr space-between + margin-left:auto bug). #266: every
@@ -384,7 +404,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // currentFolder.path; the row is omitted when absent. #266: escaped.
       if (e.currentFolder) h += '<span class="tw-k">Folder</span><span class="tw-v tw-cfv">' + escHtml(e.currentFolder) + "</span><span></span>";
       h += "</div>";
-      h += '<div class="tw-subj">' + escHtml(e.subject) + "</div>";
+      h += '<div class="tw-subj">' + escHtml(e.subject) + thrChip + "</div>";
       if (e.bodyPreview) h += '<div class="tw-body">' + escHtml(e.bodyPreview) + "</div>";
       if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + escHtml(e.attachment) + "</span></div>";
       if (e.sentNotice) h += '<div class="tw-sent">📤 ' + escHtml(e.sentNotice) + "</div>";
@@ -846,6 +866,12 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
      * calling skill (widget is sandboxed, no IO), triggered by openDetailsFile(). */
     function escHtml(s) {
       return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    /* #266 for attribute contexts: escHtml leaves quotes intact, which is safe
+       between tags but would break out of a title="…" and let email-derived text
+       inject markup. Anything that lands in an attribute goes through here. */
+    function escAttr(s) {
+      return escHtml(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
     function fmtVal(v) {
       if (v === null || v === undefined || v === "") return "(none)";

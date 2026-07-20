@@ -47,6 +47,8 @@
     + ".tg-row:first-of-type{border-top:none}"
     + ".tg-move{flex:1;min-width:0}"
     + ".tg-subj{font-weight:500}"
+    + ".tg-from{color:#444;font-size:13px}"
+    + ".tg-faddr{color:#8a9099;font-size:12px;margin-left:6px}"
     + ".tg-path{color:#666;font-size:13px}"
     + ".tg-flags{color:#a15c00;font-size:12px}"
     + ".tg-btns{display:flex;gap:6px;flex:none}"
@@ -98,7 +100,20 @@
         ? '<div class="tg-ch">channel <input data-ch="' + esc(op.gateKey) + '" placeholder="'
           + esc(op.scopeHint ? "hint: " + op.scopeHint : "or leave blank to auto-predict") + '"></div>'
         : "";
+      /* #331: sender on the gate row. #308 made this the un-skippable approval
+         surface, and until now it showed subject + paths only — approving an
+         archive or a PARA move on a subject line alone. Mirrors the card face
+         (#270): display name, with the raw address appended only when it adds
+         something (absent when the envelope carried no name, since `sender` is
+         then already the address — the producer sends null). Escaped like every
+         other email-derived string (#266). */
+      var from = op.sender
+        ? '<div class="tg-from">' + esc(op.sender)
+          + (op.senderAddress ? '<span class="tg-faddr">' + esc(op.senderAddress) + "</span>" : "")
+          + "</div>"
+        : "";
       return '<div class="tg-move"><div class="tg-subj">' + esc(op.subject) + "</div>"
+        + from
         + '<div class="tg-path">' + esc(op.action) + ": " + esc(op.sourcePath || "Inbox")
         + " → " + esc(op.destPath || "(in place)") + "</div>" + flags + chan + "</div>";
     }

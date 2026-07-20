@@ -20,15 +20,19 @@ const cfg = {
   tier1Count: 8,
   tier2: [
     { gateKey: "batch-A|0|E1|wa", subject: "Re: waiting on <Tanya>", action: "wa",
+      sender: "Tanya <Beck>", senderAddress: "tanya@ku.dk",
       sourcePath: "Inbox", destPath: "Inbox/Waiting", flags: [] },
     { gateKey: "batch-A|1|E2|df", subject: "Faktura marts", action: "df",
+      sender: "faktura@e-boks.dk", senderAddress: null,
       sourcePath: "Inbox", destPath: "Inbox/Defer/Defer_eboks", flags: [] },
   ],
   tier3: [
     { gateKey: "batch-A|2|E3|pa", subject: "New initiative Helix", action: "pa",
+      sender: "Helix PMO", senderAddress: "pmo@helix.example",
       sourcePath: "Inbox", destPath: ".PARA-work/1_Current_projects/Helix",
       flags: ["create-folder"], needsChannel: false },
     { gateKey: "batch-A|3|E4|su", subject: "KU interview slide-prep", action: "su",
+      sender: "Tanya Beck", senderAddress: "tanya@ku.dk",
       sourcePath: "Inbox", destPath: "Inbox/Sunsama_task",
       flags: ["su-no-channel"], needsChannel: true, scopeHint: "scope: work (KU)" },
   ],
@@ -60,6 +64,17 @@ ok("three tier sections", sections.length === 3);
 ok("Tier-2 rows enumerated (2)", [...document.querySelectorAll(".tg-sec")][1].querySelectorAll(".tg-row").length === 2);
 ok("Tier-3 rows enumerated (2)", [...document.querySelectorAll(".tg-sec")][2].querySelectorAll(".tg-row").length === 2);
 ok("subject HTML-escaped (no raw <)", document.body.innerHTML.includes("&lt;Tanya&gt;"));
+ok("#331 sender rendered on every gate row",
+  document.querySelectorAll(".tg-from").length === 4);
+ok("#331 sender name shown", document.body.textContent.includes("Helix PMO"));
+ok("#331 raw address shown beside the name",
+  document.querySelector(".tg-faddr").textContent === "tanya@ku.dk");
+ok("#331 sender HTML-escaped (no raw <)",
+  document.querySelector(".tg-from").innerHTML.includes("&lt;Beck&gt;"));
+ok("#331 no second line when sender IS the address (#270 parity)",
+  [...document.querySelectorAll(".tg-from")]
+    .find(n => n.textContent.startsWith("faktura@e-boks.dk"))
+    .querySelector(".tg-faddr") === null);
 ok("create-folder flag surfaced", document.body.textContent.includes("create-folder"));
 ok("su op shows a channel input", !!document.querySelector('[data-ch="batch-A|3|E4|su"]'));
 ok("non-su op has no channel input", !document.querySelector('[data-ch="batch-A|2|E3|pa"]'));

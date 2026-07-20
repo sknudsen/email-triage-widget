@@ -306,15 +306,17 @@ function mkP(i) {
 const emailsP = [];
 for (let i = 0; i < 15; i++) emailsP.push(mkP(i));
 // E0 + E1 share a conversation, both on page 0 -> carousel count 1.
-emailsP[0].metadata.conversationId = "CONVPG"; emailsP[0].threadRef = "1 other email in this thread";
-emailsP[1].metadata.conversationId = "CONVPG"; emailsP[1].threadRef = "1 other email in this thread";
+emailsP[0].metadata.conversationId = "CONVPG"; emailsP[0].threadRef = "1 other email in this thread"; emailsP[0].threadCount = 1;
+emailsP[1].metadata.conversationId = "CONVPG"; emailsP[1].threadRef = "1 other email in this thread"; emailsP[1].threadCount = 1;
 
 window.initTriage({ batch: 1, total: 15, emails: emailsP, tree });
 ok("page label shows 2 pages", $g("tw-page").textContent === "Page 1 of 2");
 ok("13 dots on page 0 (page-scoped)", document.querySelectorAll(".tw-dot").length === 13);
 ok("pos is within-page (1 of 13)", $g("tw-pos").textContent === "1 of 13");
-ok("thread line mixes run + carousel", !!document.querySelector(".tw-thr") &&
-  /1 other email in this thread, 1 in this carousel/.test(document.querySelector(".tw-thr").textContent));
+ok("thread chip mixes run + carousel in its hover text", !!document.querySelector(".tw-thc") &&
+  /1 other email in this thread, 1 in this carousel/.test(document.querySelector(".tw-thc").title));
+ok("#331/2 chip reads <on this page>/<in thread> when a sibling is on the page",
+  document.querySelector(".tw-thc").textContent.trim() === "🔗 1/1");
 ok("prev disabled at page start", $g("tw-prev").disabled === true);
 ok("page-prev disabled on first page", $g("tw-ppage").disabled === true);
 
@@ -544,7 +546,8 @@ console.log("\n== #266 HTML-escape email-derived strings ==");
 const xss = { id: "X1", sender: "<b>e</b>vil@x.dk", date: "Mon <09:00>", subject: "<img src=x onerror=alert(1)>hi",
   bodyPreview: "<script>alert('p')</script> body & stuff", attachment: "<i>a</i>.pdf", sentNotice: "<u>sent</u>",
   badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
-  suggestedPath: "<x>/path", reason: "<reason> & more", annotation: "<note>", threadRef: "<3> others",
+  suggestedPath: "<x>/path", reason: "<reason> & more", annotation: "<note>",
+  threadRef: '<3> "others"', threadCount: 3,
   suggestion: null };
 window.initTriage({ batch: 1, total: 1, emails: [xss], tree, deferSubfolders });
 ok("#266 no <img> element injected from subject", document.querySelector("#tw-card img") === null);
@@ -552,7 +555,13 @@ ok("#266 no <script> element injected from bodyPreview", document.querySelector(
 ok("#266 no <b> element injected from sender", document.querySelector(".tw-meta b") === null);
 ok("#266 bodyPreview survives as escaped text (not markup)", document.querySelector(".tw-body").textContent.includes("<script>alert('p')</script>"));
 ok("#266 subject survives as escaped text", document.querySelector(".tw-subj").textContent.includes("<img src=x onerror=alert(1)>hi"));
-ok("#266 threadRef survives as escaped text", document.querySelector(".tw-thr").textContent.includes("<3> others"));
+ok("#266 threadRef survives as escaped text in the chip title",
+  document.querySelector(".tw-thc").title === '<3> "others"');
+// The quote is the break-out character in an attribute context, and it is the
+// one escHtml leaves alone — so escAttr's job is exactly this. (`<`/`>` need no
+// escaping inside an attribute value and the serializer prints them raw.)
+ok("#266 chip title escapes the quote that would break out of the attribute",
+  document.querySelector(".tw-subj").innerHTML.includes("&quot;others&quot;"));
 ok("#266 reason survives as escaped text", document.querySelector(".tw-reason").textContent.includes("<reason> & more"));
 ok("#266 card innerHTML carries escaped entity (&lt;script&gt;)", document.getElementById("tw-card").innerHTML.includes("&lt;script&gt;"));
 
@@ -571,15 +580,41 @@ document.querySelectorAll(".tw-dot")[0].onclick();        // back to the decided
 ok("#18 decided card renders .tw-dtag inside the grid", !!document.querySelector(".tw-meta .tw-dtag"));
 ok("#18 From label still present alongside the tag (not collapsed)", [...document.querySelectorAll(".tw-meta .tw-k")].some((k) => k.textContent === "From"));
 
-/* ===== #263 thread-ref row reserves stable space ===== */
-console.log("\n== #263 thread-ref row reserves space ==");
-ok("#263 .tw-thr carries a min-height floor", /\.tw-thr\{[^}]*min-height/.test(STYLE));
+/* ===== #331/2 thread chip on the subject line (retires the #263 reserved row) =====
+   #263 kept a full-width thread row on every card, empty when there was no
+   thread, so heights stayed constant. The S118 calibration render showed that
+   empty band reading as dead whitespace above From, and cardMinHeightPx (#290)
+   now holds height stability instead — so the row is gone and the reference is a
+   chip beside the subject. */
+console.log("\n== #331/2 thread chip on the subject line ==");
+ok("#331/2 the reserved .tw-thr row is gone from the stylesheet",
+  !/\.tw-thr\{/.test(STYLE));
 const noThr = { id: "NT", sender: "a@x.dk", date: "Mon", subject: "no thread",
   bodyPreview: "x", attachment: null, sentNotice: null, badgeLabel: "Defer", badgeClass: "badge-df",
   suggestedAction: "df", suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
 window.initTriage({ batch: 1, total: 1, emails: [noThr], tree });
-ok("#263 .tw-thr present even when threadRef is null (no reflow)", !!document.querySelector(".tw-thr"));
-ok("#263 empty thread row carries no link glyph", document.querySelector(".tw-thr").textContent.indexOf("🔗") === -1);
+ok("#331/2 no thread row rendered at all when there is no thread",
+  document.querySelector(".tw-thr") === null);
+ok("#331/2 no chip when there is no thread", document.querySelector(".tw-thc") === null);
+const yesThr = Object.assign({}, noThr, { id: "YT", subject: "threaded",
+  threadRef: "3 other emails in this thread", threadCount: 3 });
+window.initTriage({ batch: 1, total: 1, emails: [yesThr], tree });
+ok("#331/2 chip renders inside the subject line, not above it",
+  !!document.querySelector(".tw-subj .tw-thc"));
+ok("#331/2 no sibling on this page -> bare run total, not a puzzling 0/3",
+  document.querySelector(".tw-thc").textContent.trim() === "🔗 3");
+ok("#331/2 the sentence is the hover text",
+  document.querySelector(".tw-thc").title === "3 other emails in this thread");
+// Back-compat: an artifact baked before threadCount existed carries only the
+// prose. The chip still renders, from the page-local count the widget derives.
+const oldThr = Object.assign({}, noThr, { id: "OT", subject: "old bake",
+  threadRef: "2 other emails in this thread" });
+const oldThr2 = Object.assign({}, oldThr, { id: "OT2" });
+oldThr.metadata = { conversationId: "COLD" };
+oldThr2.metadata = { conversationId: "COLD" };
+window.initTriage({ batch: 1, total: 2, emails: [oldThr, oldThr2], tree });
+ok("#331/2 no threadCount (pre-#331 bake) -> chip still renders from the page count",
+  document.querySelector(".tw-thc").textContent.trim() === "🔗 1");
 
 /* ===== #21 completion card after the last decided card ===== */
 console.log("\n== #21 completion-signal card ==");
