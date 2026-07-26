@@ -6,8 +6,15 @@
  *
  * emails: array of { id, sender, date, subject, bodyPreview?, attachment?,
  *         sentNotice?, badgeLabel, badgeClass, suggestedAction,
- *         suggestedPath?, reason, annotation?, threadRef?, suggestion? }
+ *         suggestedPath?, reason, annotation?, priorNote?, threadRef?,
+ *         suggestion? }
  *   - bodyPreview: first ~200 chars of email body (shown below subject)
+ *   - priorNote: the note this email was last deferred with, carried back from
+ *     its Outlook category by Stage 1 (#359). Pre-fills the wa/df fold-out so a
+ *     resurfaced item does not have to be re-typed; a Stage 2
+ *     parameterisation.contextNote takes precedence. Same source as annotation
+ *     today, separate field by contract — annotation is display, priorNote is
+ *     re-committed text.
  *   - suggestedPath: full PARA path for ALL suggestion types (shown below reason)
  *     e.g. '.PARA-work/4_Archive/0_Inbox_trash' for triage dump
  *   - suggestion: the verbatim Stage 2 Suggestion record for this email, stitched
@@ -712,11 +719,19 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
      * first edit (item 9). de/cu open single required free-text panels — an empty
      * submit blocks the decision and surfaces an inline hint (confirmNew pattern).
      * All values route through buildDecision into user_typed_params. */
-    function prefillField(id, val) {
+    /* `src` labels where the value came from, so the hint can say so (#359).
+     * "suggestion" = Stage 2 proposed it; "prior" = the operator's own previous
+     * note, carried back from Outlook. The distinction is the operator's: one is
+     * a machine proposal to check, the other is their own words to amend, and
+     * "· from suggestion" over their own text would be a lie. */
+    function prefillField(id, val, src) {
       const el = $(id), hint = $(id + "-pf");
       if (val !== undefined && val !== null && String(val) !== "") {
         el.value = String(val); el.classList.add("tw-pf");
-        if (hint) hint.style.display = "inline";
+        if (hint) {
+          hint.textContent = src === "prior" ? " · your previous note" : " · from suggestion";
+          hint.style.display = "inline";
+        }
       } else {
         el.value = ""; el.classList.remove("tw-pf");
         if (hint) hint.style.display = "none";
@@ -784,8 +799,33 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       dfDest = null; dfFocus = 0; dfPrefill = null; wdEdited = false; // #242: fresh edit-vs-accept baseline
       $("tw-wd-title").textContent = code === "wa" ? "Waiting for" : "Defer";
       const p = (emails[cur].suggestion && emails[cur].suggestion.parameterisation) || {};
-      prefillField("tw-wd-note", p.contextNote);
-      prefillField("tw-wd-date", p.thresholdDate);
+      /* #359: on a *resurfaced* deferred email Stage 2 emits an empty
+       * parameterisation, so `p.contextNote` is undefined and the field used to
+       * open blank — while the note the operator wrote last time sat two lines
+       * away on the same record. They retyped it, which is why the S121 stacks
+       * are byte-identical, and why #360's text dedup only becomes reliable once
+       * this is fixed.
+       *
+       * Precedence: a Stage 2 note wins where present. Stage 2 proposing a note
+       * is a deliberate act on *this* run, so it is the fresher statement; the
+       * prior note is the fallback for the (currently universal) case where
+       * Stage 2 offers nothing. The value is checked for emptiness rather than
+       * `undefined` so an empty-string parameterisation doesn't shadow a real
+       * prior note.
+       *
+       * The date deliberately does NOT fall back the same way. A stale threshold
+       * is worse than a blank one: the carrier writes it to the follow-up flag,
+       * so silently re-committing last week's date would keep an item's due date
+       * pinned in the past every time it resurfaced. A note re-confirmed is still
+       * true; a date re-confirmed is usually not. */
+      const stage2Note = (p.contextNote !== undefined && p.contextNote !== null
+        && String(p.contextNote) !== "") ? p.contextNote : null;
+      prefillField(
+        "tw-wd-note",
+        stage2Note !== null ? stage2Note : emails[cur].priorNote,
+        stage2Note !== null ? "suggestion" : "prior"
+      );
+      prefillField("tw-wd-date", p.thresholdDate, "suggestion");
       // Defer-subfolder picker: only for df, only when subfolders exist (#243).
       const showGrid = code === "df" && deferSubfolders.length > 0;
       $("tw-dfsub").style.display = showGrid ? "block" : "none";
@@ -828,6 +868,30 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
      *     widget knows whether the operator touched a pre-filled field, so it
      *     records it directly (S46's downstream diff against
      *     suggestion.parameterisation is gone with the echo).
+     *
+     * #359 raised what paramsEdited means once a field can be pre-filled from
+     * the operator's OWN prior note rather than from Stage 2. Decision (S125):
+     * the flag keeps its literal meaning — "did the operator touch a pre-filled
+     * field" — so re-confirming an unchanged prior note stamps `false`, exactly
+     * as accepting an unchanged suggestion does.
+     *
+     * That is deliberately NOT a claim that the two events are the same. They
+     * are not: accepting a suggestion is agreement with Stage 2, while leaving
+     * your own note alone is agreement with yourself, and counting the second as
+     * the first would credit Stage 2 for the operator's prior work — the exact
+     * dishonesty #358 removed from the override metric. The flag stays literal
+     * because the distinction does not need to live in it: the two cases are
+     * separable after the fact from artefacts already written immutably. A row
+     * whose `user_typed_params.contextNote` equals the snapshot's `contextNote`
+     * for that emailId, where `suggestions-<stamp>.json` carries no
+     * `parameterisation.contextNote`, was a prior-note re-confirm; anything else
+     * was not. Derived, not duplicated — the same choice made for grouped_review
+     * and for #358's resolved-destination test.
+     *
+     * The consequence to respect: any future analysis that reads paramsEdited as
+     * "accepted Stage 2's parameters" must do that join first, or it will
+     * over-count acceptance on the deferral path — which is the highest-volume
+     * path in the pipeline, so the error would not be small.
      */
     function buildDecision(code, params, edited) {
       const e = emails[cur];

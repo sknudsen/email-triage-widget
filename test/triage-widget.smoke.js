@@ -852,5 +852,99 @@ window.TW.togglePm();
 const allLeaves = document.querySelectorAll('#tw-pgrid .tw-ti').length;
 ok("#287 filtered grid renders fewer leaf cells than show-all (height recomputed)", filteredLeaves < allLeaves);
 
+/* =======================================================================
+ * #359 — the wa/df fold-out pre-fills from the operator's prior note
+ *
+ * A resurfaced deferred email arrives with Stage 2 emitting an empty
+ * parameterisation, so the note field used to open blank while the note the
+ * operator wrote last time sat on the same record as `priorNote`. They retyped
+ * it — which is why the S121 category stacks are byte-identical, and why #360's
+ * text dedup only becomes reliable once this works.
+ * ======================================================================= */
+console.log("== #359 prior-note prefill ==");
+
+function mkNoteEmail(id, priorNote, sugParam) {
+  return {
+    id, sender: "a@b.dk", date: "Mon 20 Jul 09:00", subject: "Resurfaced deferral",
+    bodyPreview: "", badgeLabel: "Defer", badgeClass: "df",
+    suggestedAction: "df", suggestedPath: null, reason: "",
+    annotation: priorNote, priorNote: priorNote, threadRef: null,
+    suggestion: sugParam === undefined ? null : makeSuggestion(id, "df", sugParam),
+  };
+}
+const noteEl = () => document.getElementById("tw-wd-note");
+const noteHint = () => document.getElementById("tw-wd-note-pf");
+const dateEl = () => document.getElementById("tw-wd-date");
+
+// 1. Prior note present, Stage 2 silent → the prior note fills the field.
+window.initTriage({ batch: 1, total: 1, emails: [mkNoteEmail("P1", "Check bank statements")], tree: null });
+window.TW.decide("df");
+ok("#359 prior note pre-fills the field", noteEl().value === "Check bank statements");
+ok("#359 prior note carries the pre-filled styling (tw-pf)", noteEl().classList.contains("tw-pf"));
+ok("#359 prior note hint visible", noteHint().style.display === "inline");
+ok("#359 prior note hint says it is the operator's own, not a suggestion",
+  /previous note/i.test(noteHint().textContent) && !/from suggestion/i.test(noteHint().textContent));
+
+// 2. Stage 2 wins where present — a note proposed on THIS run is the fresher
+//    statement than one carried back from a previous one.
+window.initTriage({ batch: 1, total: 1,
+  emails: [mkNoteEmail("P2", "the old note", { contextNote: "the Stage 2 note" })], tree: null });
+window.TW.decide("df");
+ok("#359 Stage 2 contextNote takes precedence over the prior note",
+  noteEl().value === "the Stage 2 note");
+ok("#359 hint reverts to 'from suggestion' when Stage 2 supplied it",
+  /from suggestion/i.test(noteHint().textContent));
+
+// 3. An EMPTY Stage 2 note must not shadow a real prior note (emptiness, not
+//    presence, is the test — an empty parameterisation string is not a proposal).
+window.initTriage({ batch: 1, total: 1,
+  emails: [mkNoteEmail("P3", "the old note", { contextNote: "" })], tree: null });
+window.TW.decide("df");
+ok("#359 empty Stage 2 note falls through to the prior note", noteEl().value === "the old note");
+
+// 4. Neither present → blank, unstyled (the pre-#359 behaviour, preserved).
+window.initTriage({ batch: 1, total: 1, emails: [mkNoteEmail("P4", null)], tree: null });
+window.TW.decide("df");
+ok("#359 no prior note and no suggestion -> field blank", noteEl().value === "");
+ok("#359 blank field carries no pre-filled styling", !noteEl().classList.contains("tw-pf"));
+ok("#359 blank field hides the hint", noteHint().style.display === "none");
+
+// 5. The DATE does not fall back to a prior value. The carrier writes it to the
+//    follow-up flag, so re-committing a stale threshold would pin a resurfaced
+//    item's due date in the past. A note re-confirmed is still true; a date is not.
+window.initTriage({ batch: 1, total: 1, emails: [mkNoteEmail("P5", "a prior note")], tree: null });
+window.TW.decide("df");
+ok("#359 date field stays blank on a resurfaced email", dateEl().value === "");
+ok("#359 date field carries no pre-filled styling", !dateEl().classList.contains("tw-pf"));
+
+// 6. #242 stamping: re-confirming an UNCHANGED prior note is an accept
+//    (paramsEdited=false) — the flag keeps its literal "did they touch a
+//    pre-filled field" meaning. Distinguishing this from accepting a Stage 2
+//    suggestion is a post-hoc join, deliberately not encoded in the boolean.
+window.initTriage({ batch: 1, total: 1, emails: [mkNoteEmail("P6", "unchanged note")], tree: null });
+window.TW.decide("df");
+window.TW.confirmWaitDefer();
+lastPrompt = null;
+window.TW.submit();
+const p6 = JSON.parse(lastPrompt.slice("batch:".length))[0];
+ok("#359 unchanged prior note is carried into the decision row",
+  p6.user_typed_params.contextNote === "unchanged note");
+ok("#359 re-confirming an unchanged prior note stamps paramsEdited=false",
+  p6.paramsEdited === false);
+
+// 7. …and amending it stamps paramsEdited=true, as editing any pre-filled field
+//    does. This is the path that only opens up once the field pre-fills at all.
+window.initTriage({ batch: 1, total: 1, emails: [mkNoteEmail("P7", "unchanged note")], tree: null });
+window.TW.decide("df");
+noteEl().value = "amended note";
+noteEl().dispatchEvent(new window.Event("input"));
+ok("#359 editing a prior note clears its pre-filled styling", !noteEl().classList.contains("tw-pf"));
+window.TW.confirmWaitDefer();
+lastPrompt = null;
+window.TW.submit();
+const p7 = JSON.parse(lastPrompt.slice("batch:".length))[0];
+ok("#359 amended prior note reaches the row", p7.user_typed_params.contextNote === "amended note");
+ok("#359 amending a prior note stamps paramsEdited=true", p7.paramsEdited === true);
+
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
