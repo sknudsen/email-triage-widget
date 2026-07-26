@@ -17,6 +17,19 @@
  *     re-committed text.
  *   - suggestedPath: full PARA path for ALL suggestion types (shown below reason)
  *     e.g. '.PARA-work/4_Archive/0_Inbox_trash' for triage dump
+ *   - escalation (optional): { kind, label, detail } | null — the side-effect this
+ *     suggestion's plan carries beyond moving the mail: 'create-folder' for a `pa`
+ *     into a folder that is not yet an Outlook mail folder, 'create-task' for `su`
+ *     (#311). Derived producer-side (present/widget_payload.plan_escalation); the
+ *     widget switches on its PRESENCE, never on `kind`, so a new escalation class
+ *     is a producer-only change. Two render consequences: the card draws a mark
+ *     (.tw-esc) under the suggested path naming the consequence, and `ag` becomes
+ *     a two-step — the first press ARMS (nothing is decided), and the confirming
+ *     act is Enter or a click on the mark itself. Rationale: on S109 both
+ *     create-folder ops came from `ag` with neither destination actively chosen —
+ *     agreeing to a card is not the same as scrutinising a destination path, and
+ *     is certainly not consent to create a folder. Cards with no escalation keep
+ *     one-keystroke `ag`.
  *   - suggestion: the verbatim Stage 2 Suggestion record for this email, stitched
  *     in by the calling skill (input bridge). Echoed back on each decision row at
  *     submit time. Shape: { emailId, source, action, actionConfidence,
@@ -92,7 +105,7 @@
       root.innerHTML = '<div class="tw-done"><div class="tw-done-h">🎉 Inbox zero</div>' +
         '<div class="tw-done-s">Every card in this snapshot has been triaged.</div>' +
         (q0 ? '<div class="tw-quote">' + q0 + "</div>" : "") + "</div>";
-      window.TW = { go() {}, goPage() {}, decide() {}, submit() {}, stop() {}, confirmStop() {}, cancelStop() {}, toggleDetails() {} };
+      window.TW = { go() {}, goPage() {}, decide() {}, submit() {}, stop() {}, confirmStop() {}, cancelStop() {}, confirmAgree() {}, cancelAgree() {}, toggleDetails() {} };
       return;
     }
 
@@ -139,6 +152,11 @@
                            // tree (the recall hatch). Reset to false each time the panel opens.
       viewTree = tree, // #287: the filtered tree buildTree renders + nav reads. Equals `tree`
                        // until the first buildTree(); rebuilt per open so heights track what's shown.
+      agArmed = null,  // #311: index of the card whose `ag` is armed and awaiting a
+                       // second, deliberate confirm on the escalation mark. null =
+                       // nothing armed. Card-scoped on purpose: navigating away is a
+                       // disarm, so an arm can never survive to commit on a card the
+                       // operator was no longer looking at.
       fCol = 0,
       fSec = 0,
       fIdx = 0;
@@ -175,6 +193,18 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-reason{font-size:13px;color:var(--color-text-secondary);line-height:1.5}
 .tw-body{font-size:12px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 0;white-space:pre-line;max-height:var(--tw-body-max-h,126px);overflow-y:auto}
 .tw-spath{font-size:11px;color:var(--color-text-tertiary);font-family:var(--font-mono,monospace);margin-top:2px}
+/* #311 plan-escalation mark: sits under the suggested path, and becomes the
+   confirm target once \`ag\` is armed. Warning-toned unarmed (a consequence, not
+   an error); when armed it gains a ring + pulse and reads as a control. */
+.tw-esc{display:flex;align-items:center;gap:6px;margin-top:4px;padding:3px 7px;border-radius:var(--border-radius-md);background:var(--color-background-warning);color:var(--color-text-warning);font-size:11px;font-weight:500;width:fit-content;max-width:100%}
+.tw-escdot{width:6px;height:6px;border-radius:50%;background:currentColor;flex-shrink:0}
+.tw-esc.armed{cursor:pointer;box-shadow:0 0 0 2px var(--color-text-warning);animation:tw-escpulse 1s ease-in-out infinite}
+.tw-esc.armed:hover{opacity:.85}
+.tw-escgo{font-size:10px;font-weight:600;opacity:.9;margin-left:2px}
+@keyframes tw-escpulse{0%,100%{opacity:1}50%{opacity:.55}}
+/* A blinking control is the accessibility-hostile version of this affordance:
+   drop the motion and keep the ring, which is what carries the meaning. */
+@media (prefers-reduced-motion:reduce){.tw-esc.armed{animation:none}}
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
 .tw-thc{font-size:12px;font-weight:400;color:var(--color-text-info);margin-left:8px;white-space:nowrap;cursor:help}
 .tw-meta{display:grid;grid-template-columns:auto 1fr auto;column-gap:8px;row-gap:4px;align-items:baseline;margin-bottom:4px}
@@ -196,6 +226,10 @@ button.tw-a.hl{border-color:var(--color-border-info);background:var(--color-back
 button.tw-a.hl .tw-ac{color:var(--color-text-info)}
 button.tw-a.sel{border-color:var(--color-text-success);background:var(--color-background-success);font-weight:600}
 button.tw-a.sel .tw-ac{color:var(--color-text-success)}
+/* #311: the armed \`ag\` — the button states what is expected next rather than
+   offering the act, so the second press isn't a guess. */
+button.tw-a.armed{border-color:var(--color-text-warning);background:var(--color-background-warning);color:var(--color-text-warning);font-weight:600}
+button.tw-a.armed .tw-ac{color:var(--color-text-warning)}
 .tw-kh{font-size:11px;color:var(--color-text-tertiary);margin-top:8px;text-align:right}
 .tw-sr{margin-top:12px;text-align:center}
 .tw-sb{font-size:14px;padding:10px 24px;border-radius:var(--border-radius-md);border:none;background:var(--color-border-info);color:#fff;cursor:pointer;font-weight:500}
@@ -323,7 +357,10 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       for (let i = b.start; i < b.end; i++) {
         const d = document.createElement("span");
         d.className = "tw-dot" + (decisions[i] ? " decided" : "") + (i === cur ? " current" : "");
-        d.onclick = (function (idx) { return function () { showCompletion = false; cur = idx; render(); }; })(i);
+        // #311: the dot strip is navigation like ← →, so it disarms too. Without
+        // this, an arm abandoned by clicking away resurrects when the operator
+        // clicks back — armed with no fresh `ag` press, one Enter from committing.
+        d.onclick = (function (idx) { return function () { agArmed = null; showCompletion = false; cur = idx; render(); }; })(i);
         c.appendChild(d);
       }
       const pageTotal = b.end - b.start;
@@ -422,6 +459,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       if (hasSug) {
         h += '<div class="tw-reason">' + escHtml(e.reason) + "</div>";
         if (e.suggestedPath) h += '<div class="tw-spath">→ ' + escHtml(e.suggestedPath) + "</div>";
+        // #311: the plan-escalation mark. Sits directly under the path it is
+        // about, because that is the thing the operator is being asked to
+        // scrutinise. When armed it is also the confirm target — see armAgree().
+        if (e.escalation) {
+          const armed = agArmed === cur;
+          h += '<div class="tw-esc' + (armed ? " armed" : "") + '"' +
+            (armed ? ' id="tw-esc-mark" role="button" tabindex="0"' : "") +
+            '><span class="tw-escdot"></span>' + escHtml(e.escalation.label) +
+            (armed ? '<span class="tw-escgo">click to agree, or press Enter</span>' : "") +
+            "</div>";
+        }
         if (e.annotation) h += '<div style="font-size:12px;color:var(--color-text-secondary);margin-top:4px">' + escHtml(e.annotation) + "</div>";
       } else {
         h += '<div class="tw-reason tw-nosug">no Stage 2 suggestion</div>';
@@ -443,9 +491,28 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       h += "</div></div>"; // close pill row + tw-card
       if (detailsOpen) h += buildDetails(e);
       $("tw-card").innerHTML = h;
+      // #311: bind the armed mark's confirm as a real listener rather than an
+      // inline onclick attribute — same pattern as the PARA leaf rows. Inline
+      // handlers are invisible to the jsdom smoke (runScripts: "outside-only"),
+      // so the confirming click would be the one gesture in the two-step with no
+      // test behind it.
+      const escEl = $("tw-esc-mark");
+      if (escEl) escEl.addEventListener("click", () => window.TW.confirmAgree());
       document.querySelectorAll("button.tw-a").forEach((b) => { b.classList.remove("hl"); b.classList.remove("sel"); });
       const sb = $("btn-" + e.suggestedAction);
       if (sb) sb.classList.add("hl");
+      // #311: while armed, the `ag` button stops offering the act and states what
+      // is now expected — so the operator is never left pressing a key that
+      // appears to have done nothing. Restored on every render where nothing is
+      // armed, which is also how a disarm becomes visible.
+      const agb = $("btn-ag");
+      if (agb) {
+        const armed = agArmed === cur && !!e.escalation;
+        agb.innerHTML = armed
+          ? '<span class="tw-ac">ag</span>Confirm on the mark ↑'
+          : '<span class="tw-ac">ag</span>Agree';
+        agb.classList.toggle("armed", armed);
+      }
       // #196: mark the operator's own decided action distinctly from the .hl suggestion.
       if (decisions[cur]) { const db = $("btn-" + decisions[cur].decisionKey); if (db) db.classList.add("sel"); }
       $("tw-prev").disabled = cur === pb.start;
@@ -532,6 +599,22 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // the "you've finished this page" signal, instead of silently re-rendering
       // the last card with nothing to do next.
       if (pageDecidedCount(curPage) === (b.end - b.start)) showCompletion = true;
+      render();
+    }
+
+    /* #311: arm the current card's `ag` — step 1 of the two-step. Decides
+       nothing; it re-renders so the mark becomes a live control and the `ag`
+       button says what is now expected. The confirming gesture (Enter, or a
+       click on the mark) is handled by TW.confirmAgree.
+
+       Mirrors the house two-step already used for Stop (stop() arms a confirm
+       bar, confirmStop() commits) — the same shape for the same reason: an act
+       with a consequence the operator can't easily undo shouldn't be one
+       keystroke away. The difference is where the confirm lives: Stop's bar is a
+       neutral strip, while this one is deliberately the mark itself, so
+       confirming is physically an act on the consequence being confirmed. */
+    function armAgree() {
+      agArmed = cur;
       render();
     }
 
@@ -964,6 +1047,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     /* --- Public API (attached to window.TW) --- */
     window.TW = {
       go(delta) {
+        agArmed = null;   // #311: leaving the card disarms; an arm never travels
         const b = pageBounds(curPage);
         if (showCompletion) { // on the completion card: ← Prev returns to the last card; Next stays
           if (delta < 0) { showCompletion = false; cur = b.end - 1; render(); }
@@ -979,6 +1063,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       goPage(delta) {
         const p = curPage + delta;
         if (p < 0 || p >= pageCount) return;
+        agArmed = null;   // #311: same disarm-on-leave rule as go()
         showCompletion = false;
         curPage = p;
         cur = pageBounds(p).start;
@@ -992,16 +1077,58 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       openDetailsFile() { sendPrompt("details:" + emails[cur].id); }, // skill writes <snapshot>/details/<emailId>.md
 
       decide(code) {
+        // #311: reaching for any action other than `ag` is a change of mind, so
+        // disarm — and re-render, because the mark and the `ag` button label are
+        // only refreshed by render(). This runs FIRST, ahead of every early
+        // return including Stop and the panel-opening branches, so no path can
+        // leave a mark pulsing and clickable while the arm behind it is gone.
+        if (agArmed !== null && code !== "ag") { agArmed = null; render(); }
         if (code === "st") { window.TW.stop(); return; } // Stop = flush + end the sitting
         if (showCompletion) return; // action grid is inert on the completion card (#21)
         if (stopped || submittedPages[curPage]) return; // page submitted / sitting stopped — locked
+        // #311: `ag` on a plan-escalating card arms rather than decides. The
+        // operator is answering "does this look right?" while the row silently
+        // escalates into a mutation with a side-effect — a create-folder or a
+        // create-task. So agreeing takes a second, deliberate act, and that act
+        // lands ON the mark describing the consequence, where their eye has to
+        // go. Cards with no escalation are untouched: `ag` stays one keystroke.
+        if (code === "ag" && emails[cur] && emails[cur].escalation) {
+          // A second `ag` press is deliberately NOT a confirm: the whole point
+          // is that the confirming gesture lands on the mark, so double-tapping
+          // the key the operator already reached for would reopen the reflex
+          // this exists to interrupt. The button says what to do instead.
+          if (agArmed !== cur) armAgree();
+          return;
+        }
         if (code === "pa") { togglePanel("tw-pap"); return; }
         if (code === "df" || code === "wa") { openWaitDefer(code); return; }
         if (code === "de") { togglePanel("tw-dep"); setTimeout(() => $("tw-de-tgt").focus(), 50); return; }
         if (code === "cu") { togglePanel("tw-cup"); setTimeout(() => $("tw-cu-note").focus(), 50); return; }
         decisions[cur] = buildDecision(code, {});
+        agArmed = null;
         advance();
       },
+
+      /* #311: commit an armed `ag`. Reached by clicking the escalation mark or
+         pressing Enter while armed — never by any path that could fire without
+         the operator having seen the mark, which is the whole point of the
+         two-step. A no-op unless *this* card is the armed one.
+
+         It carries decide()'s locks verbatim, because it is the other write path
+         to decisions[] and a write path without the lock is worse than no lock:
+         a decision recorded onto a submitted page renders as accepted and is
+         then dropped by submit(), i.e. the operator watches a decision land that
+         does not exist — the #357 defect class, reintroduced in the widget. */
+      confirmAgree() {
+        if (agArmed !== cur) return;
+        agArmed = null;
+        if (showCompletion || stopped || submittedPages[curPage]) { render(); return; }
+        decisions[cur] = buildDecision("ag", {});
+        advance();
+      },
+
+      /* #311: abandon an armed `ag` without deciding anything. */
+      cancelAgree() { if (agArmed !== null) { agArmed = null; render(); } },
 
       // Stop the whole sitting. Two-step: stop() arms a confirm bar (Stop ends
       // the sitting, so guard against a fat-finger); confirmStop() commits.
@@ -1138,6 +1265,18 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       const sbar = $("tw-stopbar");
       if (e.key === "Escape" && sbar && sbar.style.display !== "none") { window.TW.cancelStop(); return; }
       if (e.key === "Escape" && activePanel) { closeAll(); return; }
+      // #311: the armed-`ag` two-step. Enter confirms, Escape abandons. Placed
+      // after the panel handlers so an open PARA/defer picker keeps its own
+      // Enter (that Enter selects a folder — a different act), and before the
+      // shorthand buffer, where Enter is otherwise unbound on a base card.
+      // The stop bar is excluded as well: Enter is inert there today, and an
+      // Enter that silently records a decision under a confirm bar the operator
+      // is reading is the opposite of what a confirm bar is for.
+      const stopOpen = sbar && sbar.style.display !== "none";
+      if (agArmed !== null && !activePanel && !showCompletion && !stopOpen) {
+        if (e.key === "Enter") { e.preventDefault(); window.TW.confirmAgree(); return; }
+        if (e.key === "Escape") { e.preventDefault(); window.TW.cancelAgree(); return; }
+      }
       if (e.key === "i") { e.preventDefault(); window.TW.toggleDetails(); return; } // S40: open/close details
       if (e.key === "ArrowLeft") { e.preventDefault(); window.TW.go(-1); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); window.TW.go(1); return; }

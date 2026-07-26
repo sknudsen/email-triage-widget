@@ -946,5 +946,212 @@ const p7 = JSON.parse(lastPrompt.slice("batch:".length))[0];
 ok("#359 amended prior note reaches the row", p7.user_typed_params.contextNote === "amended note");
 ok("#359 amending a prior note stamps paramsEdited=true", p7.paramsEdited === true);
 
+/* =======================================================================
+ * #311 — plan-escalating suggestions: the mark, and the two-step `ag`
+ * -----------------------------------------------------------------------
+ * On S109 BOTH create-folder ops in the run came from `ag`, neither
+ * destination actively chosen — one of them a confidence-0.5 guess into a
+ * folder the operator would not have picked. Recurred S114 and S119. The
+ * operator's framing: agreeing to a card is not the same as scrutinising a
+ * destination path, and it is certainly not consent to create a folder.
+ *
+ * Two halves, both asserted here: the card MARKS the consequence, and `ag`
+ * on a marked card takes a second deliberate act ON that mark. The second
+ * half is what makes the first half more than decoration — a mark you can
+ * agree past without touching is a mark you stop reading.
+ * ======================================================================= */
+console.log("== #311 plan-escalation mark + two-step ag ==");
+
+function mkEscEmail(id, escalation, action) {
+  return {
+    id, sender: "lead@x.dk", date: "Tue 21 Jul 09:00", subject: "New initiative Helix",
+    bodyPreview: "", badgeLabel: "PARA folder", badgeClass: "badge-pa",
+    suggestedAction: action || "pa",
+    suggestedPath: ".PARA-work/1_Current_projects/Helix",
+    reason: "Sender map -> Helix", annotation: null, threadRef: null,
+    escalation: escalation,
+    suggestion: makeSuggestion(id, action || "pa", {
+      destination: ".PARA-work/1_Current_projects/Helix", folderState: "exists_in_onedrive" }),
+  };
+}
+const CREATE_FOLDER = { kind: "create-folder", label: "will create this folder",
+                        detail: ".PARA-work/1_Current_projects/Helix" };
+const escMark = () => document.querySelector(".tw-esc");
+
+// 1. The mark renders, under the path it is about.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E1", CREATE_FOLDER)], tree: null });
+ok("#311 escalation mark rendered on the card face", !!escMark());
+ok("#311 mark names the consequence", escMark().textContent.includes("will create this folder"));
+ok("#311 mark sits after the suggested path", (() => {
+  const html = document.getElementById("tw-card").innerHTML;
+  return html.indexOf("tw-spath") < html.indexOf("tw-esc");
+})());
+ok("#311 mark is not armed before ag is pressed", !escMark().classList.contains("armed"));
+
+// 2. `ag` ARMS — it must not decide. This is the assertion the whole issue
+//    turns on: one keystroke can no longer consent to a folder creation.
+window.TW.decide("ag");
+ok("#311 first ag arms rather than deciding", (() => {
+  lastPrompt = null; window.TW.submit();
+  return lastPrompt === null;   // nothing decided ⇒ submit has nothing to send
+})());
+ok("#311 armed mark becomes a control", escMark().classList.contains("armed"));
+ok("#311 armed mark says how to confirm", escMark().textContent.includes("press Enter"));
+ok("#311 ag button states what is expected next",
+  document.getElementById("btn-ag").textContent.includes("Confirm on the mark"));
+ok("#311 ag button carries the armed class",
+  document.getElementById("btn-ag").classList.contains("armed"));
+
+// 3. Enter confirms — and produces exactly the `ag` decision it always did.
+lastPrompt = null;
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+window.TW.submit();
+ok("#311 Enter confirms the armed ag", lastPrompt !== null && lastPrompt.startsWith("batch:"));
+ok("#311 the confirmed decision is a plain ag", (() => {
+  const row = JSON.parse(lastPrompt.slice("batch:".length))[0];
+  return row.decisionKey === "ag";
+})());
+
+// 4. Clicking the mark is the other confirming gesture. Dispatched as a real
+//    click on the element, not a direct confirmAgree() call — the onclick and
+//    role="button" wiring is emitted ONLY when armed, so calling through would
+//    leave exactly that conditional untested.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E2", CREATE_FOLDER)], tree: null });
+ok("#311 the unarmed mark is not a click target", !escMark().getAttribute("role"));
+window.TW.decide("ag");
+ok("#311 the armed mark is exposed as a button", escMark().getAttribute("role") === "button");
+escMark().dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
+lastPrompt = null;
+window.TW.submit();
+ok("#311 clicking the mark confirms the armed ag",
+  lastPrompt !== null && JSON.parse(lastPrompt.slice("batch:".length))[0].decisionKey === "ag");
+
+// 4b. A second `ag` press is NOT a confirm — the confirming gesture has to land
+//     on the mark, or the two-step just becomes "press ag twice", which is the
+//     same reflex it exists to interrupt.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E2b", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+window.TW.decide("ag");
+lastPrompt = null;
+window.TW.submit();
+ok("#311 a second ag press does not confirm", lastPrompt === null);
+ok("#311 a second ag press leaves the card armed", escMark().classList.contains("armed"));
+
+// 5. Escape abandons the arm without deciding anything.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E3", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape" }));
+ok("#311 Escape disarms", !escMark().classList.contains("armed"));
+lastPrompt = null;
+window.TW.submit();
+ok("#311 a disarmed card has no decision", lastPrompt === null);
+
+// 6. Reaching for a DIFFERENT action is a change of mind — it must disarm, so a
+//    stale arm can never be confirmed into existence afterwards.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E4", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+window.TW.decide("un");           // a different decision entirely
+window.TW.confirmAgree();          // must be inert now
+lastPrompt = null;
+window.TW.submit();
+ok("#311 choosing another action disarms the pending ag", (() => {
+  const row = JSON.parse(lastPrompt.slice("batch:".length))[0];
+  return row.decisionKey === "un";
+})());
+
+// 7. An arm never travels: navigating away drops it, so it cannot commit on a
+//    card the operator has stopped looking at.
+window.initTriage({ batch: 1, total: 2,
+  emails: [mkEscEmail("E5", CREATE_FOLDER), mkEscEmail("E6", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+window.TW.go(1);
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+lastPrompt = null;
+window.TW.submit();
+ok("#311 navigating away disarms (nothing decided on either card)", lastPrompt === null);
+
+// 8. `su` escalates too — the mechanism keys off the escalation's PRESENCE, so a
+//    second kind needs no widget change. This asserts that generality directly.
+const CREATE_TASK = { kind: "create-task", label: "will create a Sunsama task", detail: null };
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E7", CREATE_TASK, "su")], tree: null });
+ok("#311 a create-task escalation marks the card too",
+  escMark().textContent.includes("will create a Sunsama task"));
+window.TW.decide("ag");
+ok("#311 the two-step is driven by presence, not by kind",
+  escMark().classList.contains("armed"));
+
+// 9. The negative case, and the one that decides whether the affordance is
+//    tolerable day to day: an ordinary card is completely untouched.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E8", null)], tree: null });
+ok("#311 no escalation ⇒ no mark", escMark() === null);
+lastPrompt = null;
+window.TW.decide("ag");
+window.TW.submit();
+ok("#311 no escalation ⇒ ag still decides in one keystroke",
+  lastPrompt !== null && JSON.parse(lastPrompt.slice("batch:".length))[0].decisionKey === "ag");
+
+/* --- The arm must not outlive the states that lock decisions -----------------
+ * Found by an independent review of this session's diff, before any of it ran
+ * live. `confirmAgree` is the second write path to decisions[], and a write path
+ * that skips decide()'s locks is worse than no lock at all: the decision renders
+ * as accepted and is then dropped by submit(), so the operator watches a decision
+ * land that does not exist. That is the #357 defect class reappearing one layer
+ * up, which is precisely the outcome this session is meant to close. */
+
+// 11. Dot-strip navigation disarms, like the arrows do. Without this an arm
+//     abandoned by clicking away resurrects when the operator clicks back.
+window.initTriage({ batch: 1, total: 2,
+  emails: [mkEscEmail("E10", CREATE_FOLDER), mkEscEmail("E11", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+document.querySelectorAll(".tw-dot")[1].onclick();
+document.querySelectorAll(".tw-dot")[0].onclick();
+ok("#311 an arm does not survive dot navigation", !escMark().classList.contains("armed"));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+lastPrompt = null;
+window.TW.submit();
+ok("#311 a resurrected card cannot be confirmed without a fresh ag", lastPrompt === null);
+
+// 12. An arm cannot write onto an already-submitted page.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E12", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+window.TW.confirmAgree();          // decides + submits the page below
+lastPrompt = null;
+window.TW.submit();
+ok("#311 setup: the page submitted", lastPrompt !== null);
+window.TW.decide("ag");            // locked page — decide() is inert
+window.TW.confirmAgree();          // …and so must confirmAgree() be
+lastPrompt = null;
+window.TW.submit();
+ok("#311 confirmAgree cannot write to a submitted page", lastPrompt === null);
+
+// 13. Stop disarms before it arms its own confirm bar, and Enter under that bar
+//     never commits an agree.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E13", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+window.TW.decide("st");
+ok("#311 Stop disarms a pending ag", !escMark().classList.contains("armed"));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter" }));
+lastPrompt = null;
+window.TW.cancelStop();
+window.TW.submit();
+ok("#311 Enter under the stop bar records nothing", lastPrompt === null);
+
+// 14. Opening a panel disarms AND re-renders — otherwise the mark keeps pulsing
+//     as a live control that no longer does anything.
+window.initTriage({ batch: 1, total: 1, emails: [mkEscEmail("E14", CREATE_FOLDER)], tree: null });
+window.TW.decide("ag");
+window.TW.decide("cu");            // opens the custom panel
+ok("#311 opening a panel clears the armed styling", !escMark().classList.contains("armed"));
+ok("#311 opening a panel restores the ag button label",
+  document.getElementById("btn-ag").textContent.includes("Agree"));
+ok("#311 the disarmed mark is no longer a click target", !escMark().getAttribute("role"));
+
+// 10. The mark is HTML-escaped like every other operator-facing string (#266).
+window.initTriage({ batch: 1, total: 1,
+  emails: [mkEscEmail("E9", { kind: "create-folder", label: "will create <script>", detail: null })],
+  tree: null });
+ok("#311 escalation label is HTML-escaped",
+  escMark().innerHTML.includes("&lt;script&gt;"));
+
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
