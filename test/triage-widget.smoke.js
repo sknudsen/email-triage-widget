@@ -415,6 +415,12 @@ const skrows = JSON.parse(lastPrompt.slice(6));
 const skrow = skrows.find((r) => r.decisionKey === "sk");
 ok("skip row emitted (decisionKey sk)", !!skrow);
 ok("skip resolves to action keep (carrier no-op)", skrow.action === "keep");
+// #338: the button is labelled "Keep", not "Skip". One concept was "Keep" when
+// suggested and "Skip" when chosen — a fourth name for a code that already meant
+// three things. The KEY stays `sk` (muscle memory; `k` collides) and the emitted
+// action stays `keep`, so only the word the operator reads changes.
+ok("#338 the sk button reads 'Keep', not 'Skip'",
+  /Keep/.test($g("btn-sk").textContent) && !/Skip/.test($g("btn-sk").textContent));
 
 /* ===== Defer-subfolder picker — prefill, keyboard, click, none (#243) ===== */
 console.log("\n== defer-subfolder picker (#243) ==");
@@ -909,12 +915,12 @@ ok("#359 no prior note and no suggestion -> field blank", noteEl().value === "")
 ok("#359 blank field carries no pre-filled styling", !noteEl().classList.contains("tw-pf"));
 ok("#359 blank field hides the hint", noteHint().style.display === "none");
 
-// 5. The DATE does not fall back to a prior value. The carrier writes it to the
-//    follow-up flag, so re-committing a stale threshold would pin a resurfaced
-//    item's due date in the past. A note re-confirmed is still true; a date is not.
+// 5. An email carrying a note but NO prior date leaves the date field blank.
+//    (S125 made this true of every prior date; #325 below narrows it to stale
+//    ones — the anti-pinning guarantee is kept, the live dates are recovered.)
 window.initTriage({ batch: 1, total: 1, emails: [mkNoteEmail("P5", "a prior note")], tree: null });
 window.TW.decide("df");
-ok("#359 date field stays blank on a resurfaced email", dateEl().value === "");
+ok("#359 date field stays blank when there is no prior date", dateEl().value === "");
 ok("#359 date field carries no pre-filled styling", !dateEl().classList.contains("tw-pf"));
 
 // 6. #242 stamping: re-confirming an UNCHANGED prior note is an accept
@@ -945,6 +951,104 @@ window.TW.submit();
 const p7 = JSON.parse(lastPrompt.slice("batch:".length))[0];
 ok("#359 amended prior note reaches the row", p7.user_typed_params.contextNote === "amended note");
 ok("#359 amending a prior note stamps paramsEdited=true", p7.paramsEdited === true);
+
+/* =======================================================================
+ * #325 — the DATE half of the same prefill, gated on the date still being live
+ *
+ * S127 dispatched ZERO set-followup-flag calls across 82 cards. Not because the
+ * carrier is broken — because the fold-out's date field always opened blank, so
+ * committing a date meant typing it from scratch, which no ordinary sitting
+ * chooses. #93's flag + due-date legs therefore had no routine coverage at all,
+ * and two still-live prior dates were silently not re-committed that run.
+ *
+ * The gate: prefill only when the prior date is >= today. S125's reasoning —
+ * that re-committing a stale date pins a resurfaced item's due date in the past
+ * — is kept exactly, and narrowed to the case it is true of.
+ * ======================================================================= */
+console.log("== #325 prior-date prefill (live dates only) ==");
+
+// Dates relative to the machine clock, so these do not rot: the whole point is
+// a comparison against "today", and a hard-coded date would silently invert.
+function isoOffsetDays(n) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  const p = (x) => String(x).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+function mkDateEmail(id, priorThresholdDate, sugParam) {
+  const e = mkNoteEmail(id, "a prior note", sugParam);
+  e.priorThresholdDate = priorThresholdDate;
+  return e;
+}
+const dateHint = () => document.getElementById("tw-wd-date-pf");
+
+// 1. A FUTURE prior date pre-fills — the case S127 lost twice.
+const future = isoOffsetDays(10);
+window.initTriage({ batch: 1, total: 1, emails: [mkDateEmail("D1", future)], tree: null });
+window.TW.decide("df");
+ok("#325 a still-live prior date pre-fills the threshold field", dateEl().value === future);
+ok("#325 pre-filled date carries the pre-filled styling", dateEl().classList.contains("tw-pf"));
+ok("#325 date hint names it as the operator's own, not a suggestion",
+  /previous date/i.test(dateHint().textContent) && !/from suggestion/i.test(dateHint().textContent));
+
+// 2. TODAY still counts — the gate is >=, not >. A threshold of today is still
+//    actionable today; excluding it would drop a date on the one day it is most
+//    likely to matter.
+window.initTriage({ batch: 1, total: 1, emails: [mkDateEmail("D2", isoOffsetDays(0))], tree: null });
+window.TW.decide("df");
+ok("#325 a prior date of TODAY still pre-fills (inclusive gate)", dateEl().value === isoOffsetDays(0));
+
+// 3. A PAST date does NOT pre-fill. This is S125's anti-pinning guarantee, kept:
+//    the carrier writes this straight to the follow-up flag.
+window.initTriage({ batch: 1, total: 1, emails: [mkDateEmail("D3", isoOffsetDays(-1))], tree: null });
+window.TW.decide("df");
+ok("#325 a stale prior date does NOT pre-fill", dateEl().value === "");
+ok("#325 stale date leaves the field unstyled", !dateEl().classList.contains("tw-pf"));
+ok("#325 stale date hides the hint", dateHint().style.display === "none");
+
+// 4. Stage 2's threshold wins where present, and is NOT gated — proposing it is
+//    an act on THIS run, so it is current by construction.
+window.initTriage({ batch: 1, total: 1,
+  emails: [mkDateEmail("D4", future, { thresholdDate: "2026-01-01" })], tree: null });
+window.TW.decide("df");
+ok("#325 Stage 2 thresholdDate takes precedence over the prior date",
+  dateEl().value === "2026-01-01");
+ok("#325 hint reverts to 'from suggestion' when Stage 2 supplied the date",
+  /from suggestion/i.test(dateHint().textContent));
+
+// 5. Malformed / absent values fall through to blank rather than being guessed
+//    at. A wrong date is worse than no date — it reaches the follow-up flag.
+["", null, undefined, "not-a-date", "2026-8-6", "2026-08-06T00:00:00Z"].forEach((bad, i) => {
+  window.initTriage({ batch: 1, total: 1, emails: [mkDateEmail("D5" + i, bad)], tree: null });
+  window.TW.decide("df");
+  ok("#325 unusable prior date " + JSON.stringify(bad) + " -> blank", dateEl().value === "");
+});
+
+// 6. The prefilled date reaches the decision row, and re-confirming it unchanged
+//    is an accept — same #242 stamping rule the note follows.
+window.initTriage({ batch: 1, total: 1, emails: [mkDateEmail("D6", future)], tree: null });
+window.TW.decide("df");
+window.TW.confirmWaitDefer();
+lastPrompt = null;
+window.TW.submit();
+const d6 = JSON.parse(lastPrompt.slice("batch:".length))[0];
+ok("#325 the pre-filled date is carried into the decision row",
+  d6.user_typed_params.thresholdDate === future);
+ok("#325 re-confirming an unchanged prior date stamps paramsEdited=false",
+  d6.paramsEdited === false);
+
+// 7. …and amending it stamps paramsEdited=true.
+window.initTriage({ batch: 1, total: 1, emails: [mkDateEmail("D7", future)], tree: null });
+window.TW.decide("df");
+dateEl().value = isoOffsetDays(20);
+dateEl().dispatchEvent(new window.Event("input"));
+ok("#325 editing a prior date clears its pre-filled styling", !dateEl().classList.contains("tw-pf"));
+window.TW.confirmWaitDefer();
+lastPrompt = null;
+window.TW.submit();
+const d7 = JSON.parse(lastPrompt.slice("batch:".length))[0];
+ok("#325 amended date reaches the row", d7.user_typed_params.thresholdDate === isoOffsetDays(20));
+ok("#325 amending a prior date stamps paramsEdited=true", d7.paramsEdited === true);
 
 /* =======================================================================
  * #311 — plan-escalating suggestions: the mark, and the two-step `ag`

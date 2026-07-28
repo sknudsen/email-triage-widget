@@ -52,10 +52,26 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
   background:var(--color-background-secondary);color:var(--color-text-secondary)}
 #tw-status.err{background:var(--color-background-danger);color:var(--color-text-danger)}
 #tw-status.ok{background:var(--color-background-success);color:var(--color-text-success)}
+/* #376 recovery block: the raw signal string, on the page, before any transport
+   runs. Collapsed by default so it costs no attention on the happy path. */
+#tw-recover{font:12px/1.5 var(--font-sans);margin-bottom:10px}
+#tw-recover[hidden]{display:none}
+#tw-recover summary{cursor:pointer;color:var(--color-text-secondary);padding:4px 0}
+#tw-recover textarea{width:100%;box-sizing:border-box;height:90px;font:11px/1.4 var(--font-mono);
+  border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-md);padding:6px;
+  background:var(--color-background-secondary);color:var(--color-text-primary)}
+#tw-recover button{font:12px var(--font-sans);margin-top:4px;padding:4px 10px;cursor:pointer;
+  border:1px solid var(--color-border-secondary);border-radius:var(--border-radius-md);
+  background:var(--color-background-primary);color:var(--color-text-primary)}
 </style>
 </head>
 <body>
 <div id="tw-status">Decide each card, then Submit page.</div>
+<details id="tw-recover" hidden>
+  <summary>Raw submit string (recovery copy — paste to the agent if transport failed)</summary>
+  <textarea id="tw-recover-text" readonly spellcheck="false"></textarea>
+  <button type="button" id="tw-recover-copy">Copy</button>
+</details>
 <div id="tw-root"></div>
 
 <script>
@@ -84,6 +100,37 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     s.className = cls || "";
   }
 
+  // #376 — park the raw signal string on the page BEFORE any transport call.
+  // The gate widget (and this one) have no localStorage resume, so a transport
+  // failure after the decisions are made costs the whole pass unless the string
+  // survives somewhere the operator can reach. With this, it costs a paste.
+  // Deliberately unconditional and first: it must not depend on the leg that
+  // just failed, and it must already be on the page when the failure is read.
+  function parkRecoveryCopy(signal) {
+    try {
+      var box = document.getElementById("tw-recover");
+      var ta = document.getElementById("tw-recover-text");
+      if (!box || !ta) { return; }
+      ta.value = signal;
+      box.hidden = false;
+    } catch (e) { console.warn("[shell] recovery copy failed to render:", e); }
+  }
+
+  (function wireRecoveryCopy() {
+    var btn = document.getElementById("tw-recover-copy");
+    if (!btn) { return; }
+    btn.addEventListener("click", function () {
+      var ta = document.getElementById("tw-recover-text");
+      if (!ta) { return; }
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) {}
+      if (!ok && navigator.clipboard) { navigator.clipboard.writeText(ta.value); ok = true; }
+      btn.textContent = ok ? "Copied ✓" : "Select all + ⌘C";
+      setTimeout(function () { btn.textContent = "Copy"; }, 2000);
+    });
+  })();
+
   // The widget calls a global sendPrompt(); create_artifact has none, so we
   // shim it. batch: -> upload the submit; details: -> graceful note.
   window.sendPrompt = function (text) {
@@ -107,6 +154,8 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     // Unique per-page index: never overwrite a prior page's submit. The
     // monotonic count keeps files ordered (the server / fallback stamp the ts).
     var seq = ("000" + (++submitCount)).slice(-3);
+    // Before ANY transport leg is attempted (#376).
+    parkRecoveryCopy(signal);
     status("Writing page (" + n + " decisions)…", "");
 
     // Preferred transport (#204): the local triage-transport MCP writes the

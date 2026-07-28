@@ -15,6 +15,12 @@
  *     parameterisation.contextNote takes precedence. Same source as annotation
  *     today, separate field by contract — annotation is display, priorNote is
  *     re-committed text.
+ *   - priorThresholdDate: the date this email was last deferred until, as bare
+ *     'YYYY-MM-DD', carried back from its Outlook follow-up flag by Stage 1
+ *     (#325). The date half of priorNote's prefill, and gated on it being
+ *     STILL LIVE: prefilled only when >= today, otherwise the field opens
+ *     blank. See maybePriorDate() for why the gate lives here and not in the
+ *     producer.
  *   - suggestedPath: full PARA path for ALL suggestion types (shown below reason)
  *     e.g. '.PARA-work/4_Archive/0_Inbox_trash' for triage dump
  *   - escalation (optional): { kind, label, detail } | null — the side-effect this
@@ -309,7 +315,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"><span class="tw-ac">ag</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
     <div class="tw-bc"><div class="tw-cl">Handle now</div><button class="tw-a" id="btn-do" onclick="TW.decide('do')"><span class="tw-ac">do</span>Do now</button><button class="tw-a" id="btn-de" onclick="TW.decide('de')"><span class="tw-ac">de</span>Delegate</button><button class="tw-a" id="btn-wa" onclick="TW.decide('wa')"><span class="tw-ac">wa</span>Waiting</button></div>
     <div class="tw-bc"><div class="tw-cl">Defer</div><button class="tw-a" id="btn-su" onclick="TW.decide('su')"><span class="tw-ac">su</span>Sunsama</button><button class="tw-a" id="btn-df" onclick="TW.decide('df')"><span class="tw-ac">df</span>Defer</button><button class="tw-a" id="btn-un" onclick="TW.decide('un')"><span class="tw-ac">un</span>Undecided</button></div>
-    <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">sk</span>Skip</button></div>
+    <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">sk</span>Keep</button></div>
   </div>
   <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
   <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pmf" id="tw-pmf"></div><div class="tw-pg" id="tw-pgrid"></div>
@@ -332,7 +338,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     /* --- Helpers --- */
     const $ = (id) => document.getElementById(id);
     // Human labels for the inline decision echo (#196). Keyed by decisionKey.
-    const DEC_LABELS = { ag: "Agree", cu: "Custom", st: "Stop", sk: "Skip", do: "Do now", de: "Delegate", wa: "Waiting", su: "Sunsama", df: "Defer", un: "Undecided", pa: "PARA folder", ar: "Triage dump" };
+    const DEC_LABELS = { ag: "Agree", cu: "Custom", st: "Stop", sk: "Keep", do: "Do now", de: "Delegate", wa: "Waiting", su: "Sunsama", df: "Defer", un: "Undecided", pa: "PARA folder", ar: "Triage dump" };
     // #196: the fixed triage folder each action files into when no operator-typed
     // destination overrides it. Mirror (NOT import) of carrier.py
     // TRIAGE_FOLDER_DEST + SUNSAMA_FOLDER_DEST — re-implemented here for the
@@ -807,18 +813,55 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
      * note, carried back from Outlook. The distinction is the operator's: one is
      * a machine proposal to check, the other is their own words to amend, and
      * "· from suggestion" over their own text would be a lie. */
-    function prefillField(id, val, src) {
+    function prefillField(id, val, src, priorLabel) {
       const el = $(id), hint = $(id + "-pf");
       if (val !== undefined && val !== null && String(val) !== "") {
         el.value = String(val); el.classList.add("tw-pf");
         if (hint) {
-          hint.textContent = src === "prior" ? " · your previous note" : " · from suggestion";
+          hint.textContent = src === "prior"
+            ? (priorLabel || " · your previous note")
+            : " · from suggestion";
           hint.style.display = "inline";
         }
       } else {
         el.value = ""; el.classList.remove("tw-pf");
         if (hint) hint.style.display = "none";
       }
+    }
+    /* Today as bare 'YYYY-MM-DD' in the OPERATOR'S LOCAL timezone — read at call
+     * time, never cached, so a sitting that runs past local midnight sees the new
+     * day (the #377 defect class). Built from the local date parts rather than
+     * toISOString(), which converts to UTC and would report the wrong day for
+     * anyone east or west of it for part of every day. */
+    function todayLocalISO() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, "0");
+      return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+    }
+    /* The ≥-today gate on a carried-back threshold date (#325).
+     *
+     * Why prefill a prior date at all: before this, the fold-out's date field
+     * always opened blank, so committing a date meant typing it from scratch —
+     * which no ordinary sitting chooses. S127 dispatched ZERO set-followup-flag
+     * calls across 82 cards, leaving #93's flag + due-date legs with no routine
+     * coverage, while two still-live prior dates went silently un-recommitted.
+     *
+     * Why only when it is still live: the carrier writes this value straight to
+     * the follow-up flag, so re-committing a date that has already passed would
+     * pin a resurfaced item's due date in the past, every time it resurfaced.
+     * That was S125's reasoning for never prefilling — right about stale dates,
+     * too broad for live ones.
+     *
+     * Why the gate is HERE and not in the producer: the payload is built once
+     * and then read for hours, so a staleness verdict computed at build time is
+     * simply wrong for a sitting that crosses midnight. Deciding when the
+     * fold-out opens makes it true at the only moment it matters. Comparison is
+     * a lexicographic compare of two 'YYYY-MM-DD' strings, which is exactly
+     * chronological for that format — no Date parsing, no timezone arithmetic.
+     * Inclusive: a date of TODAY is still actionable today. */
+    function maybePriorDate(d) {
+      if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+      return d >= todayLocalISO() ? d : null;
     }
     function clearPf(id) { // operator edited a pre-filled field → it's now typed
       $(id).classList.remove("tw-pf");
@@ -908,7 +951,21 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         stage2Note !== null ? stage2Note : emails[cur].priorNote,
         stage2Note !== null ? "suggestion" : "prior"
       );
-      prefillField("tw-wd-date", p.thresholdDate, "suggestion");
+      /* Date half (#325). Same precedence shape as the note above — a Stage 2
+       * threshold wins where present, the operator's own prior date is the
+       * fallback — but the fallback is additionally gated on still being live
+       * (maybePriorDate). A Stage 2 date is NOT gated: proposing it is an act on
+       * *this* run, so it is current by construction. */
+      const stage2Date = (p.thresholdDate !== undefined && p.thresholdDate !== null
+        && String(p.thresholdDate) !== "") ? p.thresholdDate : null;
+      const priorDate = stage2Date !== null
+        ? null : maybePriorDate(emails[cur].priorThresholdDate);
+      prefillField(
+        "tw-wd-date",
+        stage2Date !== null ? stage2Date : priorDate,
+        stage2Date !== null ? "suggestion" : "prior",
+        " · your previous date"
+      );
       // Defer-subfolder picker: only for df, only when subfolders exist (#243).
       const showGrid = code === "df" && deferSubfolders.length > 0;
       $("tw-dfsub").style.display = showGrid ? "block" : "none";
@@ -993,7 +1050,15 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         }
         paramsEdited = false; // ar destination is a contract; not operator-editable
       }
-      if (code === "sk") { action = "keep"; } // skip: no-action, carrier leaves it in place (NOOP_ACTIONS)
+      /* `sk` -> `keep`: no-action, carrier leaves it in place (NOOP_ACTIONS).
+       * The button is labelled "Keep" as of #338 — it was "Skip", which made one
+       * concept "Keep" when suggested and "Skip" when chosen, a fourth name on
+       * top of `keep` already meaning three things. The KEY stays `sk` (muscle
+       * memory, and `k` collides), and the emitted action stays `keep`: this is
+       * the operator deciding to leave the mail put, which is exactly what a
+       * real `keep` is. The two non-suggestion codes #338 split out are never
+       * produced by a keypress — only by Stage 2, and only via `ag`. */
+      if (code === "sk") { action = "keep"; }
       return {
         emailId: e.id,
         decisionKey: code,
