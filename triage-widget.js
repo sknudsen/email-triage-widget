@@ -44,8 +44,18 @@
  * deferSubfolders: [ { name, path, id? } ] — the children of Inbox/Defer, baked
  *   by the Stage 3 producer (present/defer_payload.py) from the Stage 1 snapshot's
  *   context.inboxFolders. Rendered as a select-only picker inside the shared
- *   wait/defer fold-out (#tw-wdp), shown ONLY when wdAction === "df" (hidden for
- *   "wa", which is always Inbox/Waiting). The "none → Inbox/Defer" default is a
+ *   wait/defer fold-out (#tw-wdp).
+ * channels: [ "Work/Deep", ... ] (optional, #199) — known Sunsama channel names,
+ *   a captured list synced like the sender map. When present, the su channel
+ *   field renders a native type-to-filter dropdown (a <datalist>) over them; the
+ *   field stays free-text so an unlisted channel or the empty "let Sunsama
+ *   predict" state both work. Absent/empty -> plain free-text, unchanged.
+ * waitingSubfolders: [ { name, path, id? } ] — the children of Inbox/Waiting,
+ *   same producer/shape (#393). As of #393 the same select-only picker is shown
+ *   for BOTH "df" and "wa" whenever the corresponding list is non-empty; wa is
+ *   operator-only (no Stage 2 prefill), df keeps its Stage 2 destination prefill.
+ *   The "none → Inbox/Waiting" default is the flat-parent fallback. The "none →
+ *   Inbox/Defer" default is a
  *   first-class grid item, NOT a list entry (the parent itself); picking it omits
  *   user_typed_params.destination so the carrier falls back to flat Inbox/Defer.
  *   Picking a subfolder sets user_typed_params.destination = its path. No "create
@@ -73,6 +83,11 @@
     const quotes = (cfg.quotes && cfg.quotes.length) ? cfg.quotes.slice() : [];
     const stamp = cfg.stamp || null;
     const deferSubfolders = (cfg.deferSubfolders && cfg.deferSubfolders.length) ? cfg.deferSubfolders.slice() : [];
+    const waitingSubfolders = (cfg.waitingSubfolders && cfg.waitingSubfolders.length) ? cfg.waitingSubfolders.slice() : []; // #393
+    // #199: known Sunsama channels (a captured list, synced like the sender map).
+    // When present, the su field gets a type-to-filter dropdown over them; the
+    // field stays free-text (an unlisted channel, or empty = let Sunsama predict).
+    const channels = (cfg.channels && cfg.channels.length) ? cfg.channels.slice() : [];
     const root = document.getElementById("tw-root");
     /* #290 render tuning (stage3-tuning.yaml → assemble_config → cfg.widget):
        apply the card min-height floor + bodyPreview scroll-cap as CSS custom
@@ -302,6 +317,7 @@ button.tw-a.armed .tw-ac{color:var(--color-text-warning)}
 input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 .tw-pfh{font-style:normal;font-size:10px;color:var(--color-text-info)}
 .tw-req{font-size:11px;color:var(--color-text-danger);margin-top:6px;display:none}
+.tw-hint{font-size:11px;color:var(--color-text-tertiary);margin-top:6px}
 .tw-pr{text-align:right;margin-top:4px}`;
     document.head.appendChild(style);
 
@@ -312,17 +328,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
   <div class="tw-nav"><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)">← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)">Next →</button></div>
   <div id="tw-card"></div>
   <div class="tw-bg">
-    <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"><span class="tw-ac">ag</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
+    <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"><span class="tw-ac">a</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"><span class="tw-ac">st</span>Stop</button></div>
     <div class="tw-bc"><div class="tw-cl">Handle now</div><button class="tw-a" id="btn-do" onclick="TW.decide('do')"><span class="tw-ac">do</span>Do now</button><button class="tw-a" id="btn-de" onclick="TW.decide('de')"><span class="tw-ac">de</span>Delegate</button><button class="tw-a" id="btn-wa" onclick="TW.decide('wa')"><span class="tw-ac">wa</span>Waiting</button></div>
     <div class="tw-bc"><div class="tw-cl">Defer</div><button class="tw-a" id="btn-su" onclick="TW.decide('su')"><span class="tw-ac">su</span>Sunsama</button><button class="tw-a" id="btn-df" onclick="TW.decide('df')"><span class="tw-ac">df</span>Defer</button><button class="tw-a" id="btn-un" onclick="TW.decide('un')"><span class="tw-ac">un</span>Undecided</button></div>
-    <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">ar</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">sk</span>Keep</button></div>
+    <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"><span class="tw-ac">tr</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"><span class="tw-ac">ke</span>Keep</button></div>
   </div>
   <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
   <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pmf" id="tw-pmf"></div><div class="tw-pg" id="tw-pgrid"></div>
-    <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" placeholder="New folder name…"/><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div></div></div>
+    <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" list="tw-nf-list" autocomplete="off" placeholder="New folder name…"/><datalist id="tw-nf-list"></datalist><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div></div></div>
   <div id="tw-wdp" style="display:none"><div class="tw-dfp">
     <div class="tw-pt" id="tw-wd-title">Defer</div>
-    <div id="tw-dfsub" style="display:none"><div class="tw-tsl">Defer subfolder · ↑↓ then Enter</div><div class="tw-dfg" id="tw-dfsgrid"></div></div>
+    <div id="tw-dfsub" style="display:none"><div class="tw-tsl" id="tw-dfsub-title">Defer subfolder · ↑↓ then Enter</div><div class="tw-dfg" id="tw-dfsgrid"></div></div>
     <div class="tw-wdf">
       <label class="tw-wdl"><span>Follow-up note<em class="tw-pfh" id="tw-wd-note-pf" style="display:none"> · from suggestion</em></span><input type="text" id="tw-wd-note" placeholder="optional"/></label>
       <label class="tw-wdl"><span>Threshold date<em class="tw-pfh" id="tw-wd-date-pf" style="display:none"> · from suggestion</em></span><input type="text" id="tw-wd-date" placeholder="YYYY-MM-DD (optional)"/></label>
@@ -330,6 +346,11 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     <div class="tw-pr"><button class="tw-cb" onclick="TW.confirmWaitDefer()">Confirm</button></div></div></div>
   <div id="tw-dep" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-de-tgt" placeholder="Delegate to… (required)"/><button class="tw-cb" onclick="TW.confirmDelegate()">Delegate</button></div><div class="tw-req" id="tw-de-hint">Required — enter a delegate.</div></div></div>
   <div id="tw-cup" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-cu-note" placeholder="Custom note… (required)"/><button class="tw-cb" onclick="TW.confirmCustom()">Save</button></div><div class="tw-req" id="tw-cu-hint">Required — enter a note.</div></div></div>
+  <!-- #199: su channel capture at submit. Optional free-text; empty is an
+       explicit "let Sunsama predict" (a knowing choice at submit, not a silent
+       surprise at dispatch). A supplied channel rides user_typed_params.channel
+       into the create-task and clears the su-no-channel Tier-3 flag. -->
+  <div id="tw-sup" style="display:none"><div class="tw-dfp"><div class="tw-dfr"><input type="text" id="tw-su-ch" list="tw-su-channels" autocomplete="off" placeholder="Sunsama channel… (optional)"/><datalist id="tw-su-channels"></datalist><button class="tw-cb" onclick="TW.confirmSunsama()">Sunsama</button></div><div class="tw-hint" id="tw-su-hint">Leave empty to let Sunsama predict the channel.</div></div></div>
   <div id="tw-stopbar" class="tw-stopbar" style="display:none"><span id="tw-stopmsg"></span><button class="tw-cb" id="tw-stopok" onclick="TW.confirmStop()">Confirm stop</button><button class="tw-nbtn" onclick="TW.cancelStop()">Cancel</button></div>
   <div class="tw-pgnav"><button class="tw-nbtn" id="tw-ppage" onclick="TW.goPage(-1)">◀ Page</button><span class="tw-lbl" id="tw-pgcount"></span><button class="tw-nbtn" id="tw-npage" onclick="TW.goPage(1)">Page ▶</button></div>
   <div class="tw-sr"><span class="tw-lbl" id="tw-gp"></span><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit page</button><button class="tw-sb" id="tw-nextpage" style="display:none" onclick="TW.goPage(1)">Next page →</button></div>
@@ -515,8 +536,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       if (agb) {
         const armed = agArmed === cur && !!e.escalation;
         agb.innerHTML = armed
-          ? '<span class="tw-ac">ag</span>Confirm on the mark ↑'
-          : '<span class="tw-ac">ag</span>Agree';
+          ? '<span class="tw-ac">a</span>Confirm on the mark ↑'
+          : '<span class="tw-ac">a</span>Agree';
         agb.classList.toggle("armed", armed);
       }
       // #196: mark the operator's own decided action distinctly from the .hl suggestion.
@@ -759,6 +780,20 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       });
     }
 
+    // #405-followup: fill the new-folder datalist with the existing leaf names in
+    // the currently-selected scope + section, so typing a "new" name surfaces the
+    // folder that already exists (Outlook or OneDrive) and the operator picks it
+    // instead of creating a competing duplicate. Refreshed on open and on change.
+    function refreshNewFolderList() {
+      const dl = $("tw-nf-list");
+      if (!dl) return;
+      const sk = $("tw-nr") && $("tw-nr").value, si = $("tw-ns") && parseInt($("tw-ns").value);
+      const leaves = (tree && tree[sk] && tree[sk].sections[si]) || [];
+      dl.innerHTML = leaves
+        .map((l) => '<option value="' + escAttr(String(l.name)) + '"></option>')
+        .join("");
+    }
+
     function getCell(c, s, i) { return document.querySelector('.tw-ti[data-col="' + c + '"][data-sec="' + s + '"][data-idx="' + i + '"]'); }
     function setFocus(c, s, i) {
       document.querySelectorAll(".tw-ti").forEach((el) => el.classList.remove("foc"));
@@ -793,12 +828,12 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     /* --- Panels --- */
     function closeAll() {
-      ["tw-pap", "tw-wdp", "tw-dep", "tw-cup"].forEach((id) => { $(id).style.display = "none"; });
+      ["tw-pap", "tw-wdp", "tw-dep", "tw-cup", "tw-sup"].forEach((id) => { $(id).style.display = "none"; });
       ["tw-de-hint", "tw-cu-hint"].forEach((id) => { $(id).style.display = "none"; }); // reset required hints
       activePanel = null;
     }
     function togglePanel(id) {
-      if (activePanel === id) { closeAll(); } else { closeAll(); $(id).style.display = "block"; activePanel = id; if (id === "tw-pap") { paraShowAll = false; buildTree(); } }
+      if (activePanel === id) { closeAll(); } else { closeAll(); $(id).style.display = "block"; activePanel = id; if (id === "tw-pap") { paraShowAll = false; buildTree(); refreshNewFolderList(); } }
     }
 
     /* --- Editable-param panels (S46, items 5–9) ----------------------------
@@ -879,9 +914,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
      * cell marks dfDest (lets the operator still add a note/date); Enter on a
      * focused cell selects AND confirms the defer in one keystroke, so
      * accept-as-suggested from a prefilled cell is a single Enter. */
+    // #393: the picker is shared by df and wa; the active source list and the
+    // flat-default label follow whichever action opened the fold-out.
+    function activeSubs() { return wdAction === "wa" ? waitingSubfolders : deferSubfolders; }
     function dfItems() {
-      return [{ name: "none → Inbox/Defer", path: null, none: true }]
-        .concat(deferSubfolders.map((s) => ({ name: s.name, path: s.path })));
+      const flatLabel = wdAction === "wa" ? "none → Inbox/Waiting" : "none → Inbox/Defer";
+      return [{ name: flatLabel, path: null, none: true }]
+        .concat(activeSubs().map((s) => ({ name: s.name, path: s.path })));
     }
     function buildDeferGrid() {
       const grid = $("tw-dfsgrid");
@@ -966,15 +1005,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         stage2Date !== null ? "suggestion" : "prior",
         " · your previous date"
       );
-      // Defer-subfolder picker: only for df, only when subfolders exist (#243).
-      const showGrid = code === "df" && deferSubfolders.length > 0;
+      // Subfolder picker: shown for df and wa (#243/#393), only when the active
+      // list has entries. The grid title tracks which tree it lists.
+      const showGrid = (code === "df" || code === "wa") && activeSubs().length > 0;
       $("tw-dfsub").style.display = showGrid ? "block" : "none";
       if (showGrid) {
+        $("tw-dfsub-title").textContent = (code === "wa" ? "Waiting" : "Defer") + " subfolder · ↑↓ then Enter";
         // Prefill the selection from the suggestion's destination so
-        // accept-as-suggested is one keystroke. A "Inbox/Defer" (flat) or
-        // unmatched destination leaves the default "none" item focused.
+        // accept-as-suggested is one keystroke. df only — Stage 2 proposes Defer
+        // subfolders; wa is operator-only at first (#393), so it opens on "none".
         const items = dfItems();
-        if (p.destination) {
+        if (code === "df" && p.destination) {
           const k = items.findIndex((it) => it.path === p.destination);
           if (k >= 0) { dfDest = items[k].path; dfFocus = k; dfPrefill = items[k].path; }
         }
@@ -1053,11 +1094,12 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       /* `sk` -> `keep`: no-action, carrier leaves it in place (NOOP_ACTIONS).
        * The button is labelled "Keep" as of #338 — it was "Skip", which made one
        * concept "Keep" when suggested and "Skip" when chosen, a fourth name on
-       * top of `keep` already meaning three things. The KEY stays `sk` (muscle
-       * memory, and `k` collides), and the emitted action stays `keep`: this is
-       * the operator deciding to leave the mail put, which is exactly what a
-       * real `keep` is. The two non-suggestion codes #338 split out are never
-       * produced by a keypress — only by Stage 2, and only via `ag`. */
+       * top of `keep` already meaning three things. The **keybind** is now `ke`
+       * (KEep) — the on-card hint reads `ke` — while the emitted **token** stays
+       * `sk`/`keep`, the same keybind-vs-token split as `tr`→`ar`. This is the
+       * operator deciding to leave the mail put, which is exactly what a real
+       * `keep` is. The two non-suggestion codes #338 split out are never produced
+       * by a keypress — only by Stage 2, and only via `ag`. */
       if (code === "sk") { action = "keep"; }
       return {
         emailId: e.id,
@@ -1169,6 +1211,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (code === "df" || code === "wa") { openWaitDefer(code); return; }
         if (code === "de") { togglePanel("tw-dep"); setTimeout(() => $("tw-de-tgt").focus(), 50); return; }
         if (code === "cu") { togglePanel("tw-cup"); setTimeout(() => $("tw-cu-note").focus(), 50); return; }
+        if (code === "su") { togglePanel("tw-sup"); if (activePanel === "tw-sup") setTimeout(() => $("tw-su-ch").focus(), 50); return; } // #199
         decisions[cur] = buildDecision(code, {});
         agArmed = null;
         advance();
@@ -1230,9 +1273,18 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       confirmNew() {
         const sk = $("tw-nr").value, si = parseInt($("tw-ns").value), name = $("tw-nfn").value.trim();
         if (!name) return;
-        const path = tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + name;
+        // #405-followup (competing-names guard): if the typed name already exists
+        // in this scope+section, select the EXISTING folder rather than proposing
+        // a duplicate. The datalist surfaces those names as the operator types, so
+        // an accidental re-create of an Outlook/OneDrive folder becomes a pick.
+        const existing = ((tree[sk] && tree[sk].sections[si]) || [])
+          .find((l) => l && String(l.name).toLowerCase() === name.toLowerCase());
         $("tw-nfn").value = "";
-        selectPara(path, true);
+        if (existing) {
+          selectPara(tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + existing.name, false, existing.folderState);
+        } else {
+          selectPara(tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + name, true);
+        }
       },
 
       confirmWaitDefer() { // wa/df: note + date optional; df adds a picked subfolder
@@ -1240,10 +1292,10 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         const utp = {};
         if (note) utp.contextNote = note;
         if (date) utp.thresholdDate = date;
-        // df only: a picked subfolder sets destination; none (dfDest null) omits
-        // it so the carrier falls back to flat Inbox/Defer (#243). wa never sets
-        // it (always Inbox/Waiting).
-        if (wdAction === "df" && dfDest) utp.destination = dfDest;
+        // df/wa (#243/#393): a picked subfolder sets destination; the "none" pick
+        // (dfDest null) omits it, so the carrier falls back to flat Inbox/Defer or
+        // Inbox/Waiting respectively.
+        if ((wdAction === "df" || wdAction === "wa") && dfDest) utp.destination = dfDest;
         decisions[cur] = buildDecision(wdAction || "df", utp, wdEdited); // #242: stamp edit-vs-accept
         $("tw-wd-note").value = ""; $("tw-wd-date").value = "";
         dfDest = null; dfFocus = 0; dfPrefill = null; wdEdited = false;
@@ -1265,6 +1317,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (!note) { $("tw-cu-hint").style.display = "block"; return; }
         decisions[cur] = buildDecision("cu", { note: note });
         $("tw-cu-note").value = "";
+        closeAll();
+        advance();
+      },
+
+      confirmSunsama() { // #199 su: channel optional — empty is "let Sunsama predict"
+        const ch = $("tw-su-ch").value.trim();
+        // Only stamp the channel when the operator typed one; an empty field
+        // omits user_typed_params.channel, so the carrier's predict path (and the
+        // su-no-channel gate flag) stay intact — the empty state is a knowing choice.
+        decisions[cur] = buildDecision("su", ch ? { channel: ch } : {});
+        $("tw-su-ch").value = "";
         closeAll();
         advance();
       },
@@ -1296,7 +1359,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     $("tw-wd-date").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmWaitDefer(); });
     $("tw-de-tgt").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmDelegate(); });
     $("tw-cu-note").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmCustom(); });
+    $("tw-su-ch").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmSunsama(); }); // #199
+    // #199: populate the channel dropdown once from the captured list.
+    (function () {
+      const dl = $("tw-su-channels");
+      if (!dl) return;
+      dl.innerHTML = channels.map((c) => '<option value="' + escAttr(String(c)) + '"></option>').join("");
+    })();
     $("tw-nfn").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmNew(); });
+    // #405-followup: re-scope the new-folder datalist when scope/section changes.
+    $("tw-nr").addEventListener("change", refreshNewFolderList);
+    $("tw-ns").addEventListener("change", refreshNewFolderList);
     $("tw-wd-note").addEventListener("input", () => clearPf("tw-wd-note")); // pre-filled → typed (item 9)
     $("tw-wd-date").addEventListener("input", () => clearPf("tw-wd-date"));
 
@@ -1314,7 +1387,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // Defer-subfolder grid (#243): same ↑↓/Enter pattern as the PARA tree,
       // but only when focus isn't in the note/date inputs (so typing a note
       // still works). Enter selects + confirms the focused subfolder.
-      if (activePanel === "tw-wdp" && wdAction === "df" && $("tw-dfsub").style.display !== "none") {
+      if (activePanel === "tw-wdp" && (wdAction === "df" || wdAction === "wa") && $("tw-dfsub").style.display !== "none") {
         const ae = document.activeElement;
         if (ae !== $("tw-wd-note") && ae !== $("tw-wd-date")) {
           if (e.key === "ArrowDown") { e.preventDefault(); dfMove(1); return; }
@@ -1342,13 +1415,29 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (e.key === "Enter") { e.preventDefault(); window.TW.confirmAgree(); return; }
         if (e.key === "Escape") { e.preventDefault(); window.TW.cancelAgree(); return; }
       }
+      // Single-key accept (#354 follow-up): `a` = agree, the one one-keystroke
+      // action. Routed through decide("ag") so the #311 escalation two-step is
+      // preserved (on an escalating card the first `a` arms; confirm on the mark
+      // or Enter). Only on a base card — never while a panel / stop bar / the
+      // completion screen is up, mirroring the arm handler's guards.
+      if (e.key === "a" && !activePanel && !showCompletion && !stopOpen) { e.preventDefault(); window._kbBuf = ""; window.TW.decide("ag"); return; }
       if (e.key === "i") { e.preventDefault(); window.TW.toggleDetails(); return; } // S40: open/close details
       if (e.key === "ArrowLeft") { e.preventDefault(); window.TW.go(-1); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); window.TW.go(1); return; }
-      const map = { ag: "ag", cu: "cu", st: "st", sk: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", ar: "ar" };
+      // #354: `tr` (TRiage) is the keybinding for the archive / Triage-dump
+      // action, matching the first-two-of-first-word pattern of do/pa; the
+      // emitted action token stays `ar` everywhere else. `tr` collides with
+      // nothing (`t` starts only this code). Accept is the single-key exception
+      // `a` (handled above), so `a` is no longer a two-char prefix and `ag` is
+      // gone from the keymap — the Agree button still decides on click.
+      // Keep is typed `ke` (KEep) — the emitted decision token stays `sk`, the
+      // same keybind-vs-token split as `tr`→`ar`. `k` starts no other code, so
+      // `ke` collides with nothing, and it moves Keep off the crowded `s` cluster
+      // (su/st). The button still decides on click via decide("sk").
+      const map = { cu: "cu", st: "st", ke: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", tr: "ar" };
       const buf = window._kbBuf || "", cand = buf + e.key;
       if (map[cand]) { e.preventDefault(); window._kbBuf = ""; window.TW.decide(map[cand]); return; }
-      if ("acdwusp".includes(e.key.toLowerCase())) { window._kbBuf = e.key; setTimeout(() => { if (window._kbBuf === e.key) window._kbBuf = ""; }, 600); } else window._kbBuf = "";
+      if ("cdwusptk".includes(e.key.toLowerCase())) { window._kbBuf = e.key; setTimeout(() => { if (window._kbBuf === e.key) window._kbBuf = ""; }, 600); } else window._kbBuf = "";
     });
 
     /* --- Init --- */

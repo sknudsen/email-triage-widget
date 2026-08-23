@@ -493,21 +493,45 @@ document.getElementById("tw-wd-note").value = "no picker here";
 window.TW.confirmWaitDefer();
 ok("df with no picker still works (decided)", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
 
-/* ===== #195 two-char keyboard: a→r reaches `ar` (no single-key short-circuit) ===== */
-console.log("\n== #195 keyboard ar / ag reachability ==");
+/* ===== keyboard scheme: single `a` = accept (exception); `tr` = archive ===== */
+console.log("\n== accept/#354 keyboard scheme (single a=accept, tr=archive) ==");
 window.initTriage({ batch: 1, total: 2, emails: [mkP(0), mkP(1)], tree });
+// E0: a single `a` accepts immediately — no second keystroke, no short-circuit bug.
 document.querySelectorAll(".tw-dot")[0].onclick();
 document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a" }));
-document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "r" }));
-ok("#195 'a' then 'r' decides E0 (ar reachable, not short-circuited to agree)", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
-document.querySelectorAll(".tw-dot")[1].onclick();
-document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a" }));
+ok("accept: single `a` decides E0 immediately", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+// a stray `g` afterwards is inert (ag is gone from the keymap).
 document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "g" }));
-ok("#195 'a' then 'g' decides E1 (agree)", document.querySelectorAll(".tw-dot")[1].className.indexOf("decided") !== -1);
+// E1: archive via `tr`.
+document.querySelectorAll(".tw-dot")[1].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "t" }));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "r" }));
+ok("#354 `tr` decides E1 (archive)", document.querySelectorAll(".tw-dot")[1].className.indexOf("decided") !== -1);
 lastPrompt = null; window.TW.submit();
 const kbById = Object.fromEntries(JSON.parse(lastPrompt.slice(6)).map((r) => [r.emailId, r]));
-ok("#195 a→r row carries decisionKey=ar", kbById.E0.decisionKey === "ar");
-ok("#195 a→g row carries decisionKey=ag (agree)", kbById.E1.decisionKey === "ag");
+ok("accept: `a` row carries decisionKey=ag (agree materialises the suggestion)", kbById.E0.decisionKey === "ag" && kbById.E0.action === "ar");
+ok("#354 `tr` row carries action=ar (token unchanged)", kbById.E1.decisionKey === "ar" && kbById.E1.action === "ar");
+// the Agree button's on-card hint now reads `a`, not `ag`.
+ok("accept: Agree button hint reads `a`", document.getElementById("btn-ag").querySelector(".tw-ac").textContent === "a");
+
+/* ===== keep is typed `ke` (token stays `sk`/keep) ===== */
+console.log("\n== keep keybind `ke` ==");
+window.initTriage({ batch: 1, total: 1, emails: [mkP(0)], tree });
+document.querySelectorAll(".tw-dot")[0].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "k" }));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "e" }));
+ok("keep: `k` then `e` decides the card", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+ok("keep: Keep button hint reads `ke`", document.getElementById("btn-sk").querySelector(".tw-ac").textContent === "ke");
+lastPrompt = null; window.TW.submit();
+const keRows = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("keep: `ke` records token decisionKey=sk / action=keep (unchanged)",
+  keRows.length === 1 && keRows[0].decisionKey === "sk" && keRows[0].action === "keep",
+  keRows.length === 1 ? JSON.stringify(keRows[0]) : "");
+// a lone `k` (no `e`) decides nothing.
+window.initTriage({ batch: 1, total: 1, emails: [mkP(1)], tree });
+document.querySelectorAll(".tw-dot")[0].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "k" }));
+ok("keep: a lone `k` does not decide", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") === -1);
 
 /* ===== #242 ar contract destination materialised on accept; override never inherits ===== */
 console.log("\n== #242 ar destination baked (accept) vs override (no inherit) ==");
@@ -1256,6 +1280,164 @@ window.initTriage({ batch: 1, total: 1,
   tree: null });
 ok("#311 escalation label is HTML-escaped",
   escMark().innerHTML.includes("&lt;script&gt;"));
+
+console.log("== #354 tr -> ar keybinding ==");
+const mk354 = (id) => ({ id, sender: "s@x", date: "d", subject: "s", bodyPreview: "b",
+  attachment: null, sentNotice: null, badgeLabel: "PARA folder", badgeClass: "badge-pa",
+  suggestedAction: "pa", suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null });
+// `t` opens the prefix buffer, `r` completes `tr` -> the archive action.
+window.initTriage({ batch: 1, total: 1, emails: [mk354("T1")], tree: null });
+document.querySelectorAll(".tw-dot")[0].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "t" }));
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "r" }));
+ok("#354 on-card accelerator hint reads `tr`", document.getElementById("btn-ar").querySelector(".tw-ac").textContent === "tr");
+lastPrompt = null; window.TW.submit();
+const td_rows = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#354 `tr` emits exactly one decision", td_rows.length === 1, "got " + td_rows.length);
+ok("#354 `tr` records the `ar` action token, not a new `tr` token",
+  td_rows.length === 1 && td_rows[0].action === "ar" && td_rows[0].decisionKey === "ar",
+  td_rows.length === 1 ? JSON.stringify(td_rows[0]) : "");
+// Single-key `a` now accepts; `ar` is not a keyboard code at all (a stray `r` is inert).
+window.initTriage({ batch: 1, total: 1, emails: [mk354("T2")], tree: null });
+document.querySelectorAll(".tw-dot")[0].onclick();
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "a" }));
+ok("accept: single `a` decides T2 (accept)", document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1);
+document.dispatchEvent(new window.KeyboardEvent("keydown", { key: "r" })); // inert
+lastPrompt = null; window.TW.submit();
+const t2rows = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("accept: `a` records one decision, decisionKey=ag", t2rows.length === 1 && t2rows[0].decisionKey === "ag");
+// the Triage-dump button still records ar on click.
+window.initTriage({ batch: 1, total: 1, emails: [mk354("T3")], tree: null });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("ar");
+lastPrompt = null; window.TW.submit();
+const ar_rows = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#354 the Triage-dump button still records `ar` on click", ar_rows.length === 1 && ar_rows[0].action === "ar");
+
+console.log("== #199 su channel capture at submit ==");
+const mk199 = (id) => ({ id, sender: "s@x", date: "d", subject: "s", bodyPreview: "b",
+  attachment: null, sentNotice: null, badgeLabel: "Sunsama", badgeClass: "badge-su",
+  suggestedAction: "su", suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null });
+// (a) operator types a channel -> it rides user_typed_params.channel.
+window.initTriage({ batch: 1, total: 1, emails: [mk199("S1")], tree: null });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("su");
+ok("#199 su opens the channel panel", document.getElementById("tw-sup").style.display === "block");
+document.getElementById("tw-su-ch").value = "Work/Deep";
+window.TW.confirmSunsama();
+lastPrompt = null; window.TW.submit();
+const su_rows = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#199 su emits one decision, action su", su_rows.length === 1 && su_rows[0].action === "su");
+ok("#199 typed channel rides user_typed_params.channel",
+  su_rows.length === 1 && su_rows[0].user_typed_params && su_rows[0].user_typed_params.channel === "Work/Deep",
+  su_rows.length === 1 ? JSON.stringify(su_rows[0].user_typed_params) : "");
+// (b) empty field is an explicit predict — no channel key, so su-no-channel still fires downstream.
+window.initTriage({ batch: 1, total: 1, emails: [mk199("S2")], tree: null });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("su");
+document.getElementById("tw-su-ch").value = "   ";  // whitespace only -> treated as empty
+window.TW.confirmSunsama();
+lastPrompt = null; window.TW.submit();
+const su_empty = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#199 empty channel omits the channel key (predict path intact)",
+  su_empty.length === 1 && !("channel" in (su_empty[0].user_typed_params || {})));
+// (c) a captured channel list populates the type-to-filter dropdown; field stays free-text.
+window.initTriage({ batch: 1, total: 1, emails: [mk199("S3")], tree: null,
+  channels: ["Work/Deep", "Personal/Errands", "Fritid & <b>music</b>"] });
+const dl = document.getElementById("tw-su-channels");
+ok("#199 channel datalist populated from cfg.channels", dl && dl.querySelectorAll("option").length === 3);
+ok("#199 su field is bound to the datalist", document.getElementById("tw-su-ch").getAttribute("list") === "tw-su-channels");
+ok("#199 channel option value is preserved as literal text, not parsed as markup",
+  dl.querySelectorAll("option")[2].value === "Fritid & <b>music</b>"
+  && dl.querySelectorAll("option")[2].querySelector("b") === null);
+// an unlisted free-text channel still rides through (dropdown is a convenience, not a gate).
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("su");
+document.getElementById("tw-su-ch").value = "Some/Unlisted";
+window.TW.confirmSunsama();
+lastPrompt = null; window.TW.submit();
+const su_free = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#199 an unlisted free-text channel still rides through",
+  su_free.length === 1 && su_free[0].user_typed_params.channel === "Some/Unlisted");
+
+console.log("== #393 wa Waiting-subfolder picker ==");
+const mk393 = (id) => ({ id, sender: "s@x", date: "d", subject: "s", bodyPreview: "b",
+  attachment: null, sentNotice: null, badgeLabel: "Waiting", badgeClass: "badge-wa",
+  suggestedAction: "wa", suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null });
+const waitingSubfolders = [
+  { name: "Waiting_expected-packages", path: "Inbox/Waiting/Waiting_expected-packages", id: "wa-exp" },
+  { name: "Waiting_return-packages", path: "Inbox/Waiting/Waiting_return-packages", id: "wa-ret" },
+];
+// (a) picker shows for wa when waitingSubfolders exist; picking one sets destination.
+window.initTriage({ batch: 1, total: 1, emails: [mk393("W1")], tree: null, waitingSubfolders });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("wa");
+ok("#393 wa opens the wait/defer fold-out", document.getElementById("tw-wdp").style.display === "block");
+ok("#393 the subfolder grid is shown for wa", document.getElementById("tw-dfsub").style.display === "block");
+ok("#393 grid title reads 'Waiting subfolder'", /Waiting subfolder/.test(document.getElementById("tw-dfsub-title").textContent));
+const waCells = document.querySelectorAll("#tw-dfsgrid .tw-ti");
+ok("#393 grid = none + 2 waiting subfolders", waCells.length === 3, "got " + waCells.length);
+waCells[1].dispatchEvent(new window.Event("click"));  // pick Waiting_expected-packages
+window.TW.confirmWaitDefer();
+lastPrompt = null; window.TW.submit();
+const wa_rows = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#393 picked Waiting subfolder rides user_typed_params.destination",
+  wa_rows.length === 1 && wa_rows[0].action === "wa"
+  && wa_rows[0].user_typed_params.destination === "Inbox/Waiting/Waiting_expected-packages",
+  wa_rows.length === 1 ? JSON.stringify(wa_rows[0].user_typed_params) : "");
+// (b) the "none" pick omits destination -> carrier falls back to flat Inbox/Waiting.
+window.initTriage({ batch: 1, total: 1, emails: [mk393("W2")], tree: null, waitingSubfolders });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("wa");
+document.querySelectorAll("#tw-dfsgrid .tw-ti")[0].dispatchEvent(new window.Event("click")); // none → Inbox/Waiting
+window.TW.confirmWaitDefer();
+lastPrompt = null; window.TW.submit();
+const wa_none = lastPrompt ? JSON.parse(lastPrompt.slice(6)) : [];
+ok("#393 'none' pick omits destination (flat Inbox/Waiting)",
+  wa_none.length === 1 && !("destination" in (wa_none[0].user_typed_params || {})));
+// (c) no waitingSubfolders -> no grid, wa stays a plain fold-out (unchanged behaviour).
+window.initTriage({ batch: 1, total: 1, emails: [mk393("W3")], tree: null });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("wa");
+ok("#393 no waitingSubfolders -> grid hidden", document.getElementById("tw-dfsub").style.display === "none");
+
+console.log("== #405-followup new-folder datalist + existing-name guard ==");
+const nfTree = { work: { label: "w", prefix: ".PARA-work", sections: [
+    [{ name: "Atlas" }, { name: "Borealis", folderState: "exists_in_outlook" }], [], [], [{ name: "0_Inbox_trash" }] ] },
+  personal: { label: "p", prefix: ".PARA-personal", sections: [[{ name: "Bolig" }], [], [], [{ name: "0_Inbox_trash" }]] } };
+const mkNF = (id) => ({ id, sender: "s@x", date: "d", subject: "s", bodyPreview: "b", attachment: null,
+  sentNotice: null, badgeLabel: "PARA folder", badgeClass: "badge-pa", suggestedAction: "pa",
+  suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null });
+window.initTriage({ batch: 1, total: 1, emails: [mkNF("N1")], tree: nfTree });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("pa");
+const nfl = document.getElementById("tw-nf-list");
+ok("#405f new-folder datalist lists the scope/section's existing leaves",
+  [...nfl.querySelectorAll("option")].map((o) => o.value).sort().join(",") === "Atlas,Borealis");
+document.getElementById("tw-ns").value = "3";
+document.getElementById("tw-ns").dispatchEvent(new window.Event("change"));
+ok("#405f datalist re-scopes on section change",
+  [...nfl.querySelectorAll("option")].map((o) => o.value).join(",") === "0_Inbox_trash");
+document.getElementById("tw-ns").value = "0";
+document.getElementById("tw-ns").dispatchEvent(new window.Event("change"));
+document.getElementById("tw-nfn").value = "borealis"; // case-insensitive match to the existing Borealis
+window.TW.confirmNew();
+lastPrompt = null; window.TW.submit();
+const nfRow = JSON.parse(lastPrompt.slice(6))[0];
+ok("#405f typing an existing name selects it (canonical casing), no duplicate proposed",
+  nfRow.user_typed_params.destination === ".PARA-work/1_Current_projects/Borealis"
+  && nfRow.user_typed_params.folderState === "exists_in_outlook",
+  JSON.stringify(nfRow.user_typed_params));
+window.initTriage({ batch: 1, total: 1, emails: [mkNF("N2")], tree: nfTree });
+document.querySelectorAll(".tw-dot")[0].onclick();
+window.TW.decide("pa");
+document.getElementById("tw-nfn").value = "Zephyr";
+window.TW.confirmNew();
+lastPrompt = null; window.TW.submit();
+const nfRow2 = JSON.parse(lastPrompt.slice(6))[0];
+ok("#405f a genuinely new name is still proposed",
+  nfRow2.user_typed_params.destination === ".PARA-work/1_Current_projects/Zephyr"
+  && nfRow2.user_typed_params.folderState === "proposed");
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
