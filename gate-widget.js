@@ -57,12 +57,26 @@
     + ".tg-b.tg-dc.on{background:#b42318;border-color:#b42318;color:#fff}"
     + ".tg-ch{margin-top:4px}"
     + ".tg-ch input{font:13px inherit;padding:2px 6px;border:1px solid #ccc;border-radius:5px;width:180px}"
+    + ".tg-rz{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:6px 0 2px;padding-left:2px}"
+    + ".tg-rl{color:#b42318;font-size:12px;font-weight:600}"
+    + ".tg-rb{border:1px solid #d7a6a1;background:#fff;color:#8a2a20;border-radius:6px;padding:2px 9px;cursor:pointer;font-size:12px}"
+    + ".tg-rb.on{background:#b42318;border-color:#b42318;color:#fff}"
+    + ".tg-err{color:#b42318;font-weight:500;margin:8px 0 0}"
     + ".tg-conf{display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:500}"
     + ".tg-submit{margin-top:6px;background:#1a1a1a;color:#fff;border:none;border-radius:7px;padding:9px 18px;cursor:pointer;font-size:14px}"
     + ".tg-done{background:#eef7f0;border:1px solid #1a7f37;border-radius:8px;padding:14px;color:#0f5323}"
     + ".tg-watch{background:#fff8e6;border:1px solid #e0c56b;border-radius:8px;padding:10px 12px;margin:0 0 14px}"
     + ".tg-wh{font-weight:600;color:#8a6d00;margin:0 0 6px}"
     + ".tg-wl{margin:0;padding-left:18px}.tg-wl li{margin:2px 0}";
+
+  // #380 — the fixed set of reasons a decline must carry, captured at the gate
+  // (never inferred afterward). `plan-wrong` is the carrier-attributable class.
+  // Keep the codes in step with present/approvals.py DECLINE_REASONS.
+  var DECLINE_REASONS = [
+    { code: "plan-wrong", label: "Plan/destination wrong" },
+    { code: "changed-mind", label: "Changed my mind" },
+    { code: "misclick", label: "Misclick" },
+  ];
 
   function initGate(cfg) {
     cfg = cfg || {};
@@ -73,10 +87,13 @@
     var watch = cfg.watch || []; // operator In-file reminder, display-only (#326)
 
     // State. tier2Confirmed: one block toggle. tier3State: per-op approval +
-    // optional channel. Undecided (approved !== true) submits as approved:false.
+    // optional channel + (for an explicit decline) a structured reason (#380).
+    // Undecided (approved === undefined) submits as approved:false, reason:null;
+    // an explicit decline (approved === false) requires a reason before submit.
     var tier2Confirmed = false;
-    var tier3State = {}; // gateKey -> { approved: bool|undefined, channel: string }
+    var tier3State = {}; // gateKey -> { approved: bool|undefined, channel, reason }
     var submitted = false;
+    var submitError = ""; // #380: shown when a declined row still needs a reason
 
     function payload() {
       return {
@@ -88,6 +105,8 @@
             gateKey: op.gateKey,
             approved: d.approved === true,
             channel: (d.channel && String(d.channel).trim()) || null,
+            // Reason rides only an explicit decline; approved/undecided → null.
+            reason: d.approved === false ? (d.reason || null) : null,
           };
         }),
       };
@@ -161,15 +180,28 @@
           + tier3.length + ")</div>";
         tier3.forEach(function (op) {
           var st = tier3State[op.gateKey] || {};
+          // #380: an explicit decline reveals the reason picker; a reason must be
+          // chosen before the gate can be submitted.
+          var reasons = "";
+          if (st.approved === false) {
+            reasons = '<div class="tg-rz"><span class="tg-rl">reason:</span>'
+              + DECLINE_REASONS.map(function (r) {
+                  return '<button class="tg-rb' + (st.reason === r.code ? " on" : "")
+                    + '" data-rz-key="' + esc(op.gateKey) + '" data-rz-code="'
+                    + esc(r.code) + '">' + esc(r.label) + "</button>";
+                }).join("")
+              + "</div>";
+          }
           h += '<div class="tg-row">' + moveHtml(op)
             + '<div class="tg-btns">'
             + '<button class="tg-b tg-ap' + (st.approved === true ? " on" : "") + '" data-ap="' + esc(op.gateKey) + '">Approve</button>'
             + '<button class="tg-b tg-dc' + (st.approved === false ? " on" : "") + '" data-dc="' + esc(op.gateKey) + '">Decline</button>'
-            + "</div></div>";
+            + "</div></div>" + reasons;
         });
         h += "</div>";
       }
 
+      if (submitError) h += '<div class="tg-err">' + esc(submitError) + "</div>";
       h += '<button class="tg-submit" id="tg-submit">Submit gate</button></div>';
       root().innerHTML = h;
       wire();
@@ -187,6 +219,11 @@
       [].forEach.call(document.querySelectorAll("[data-dc]"), function (b) {
         b.onclick = function () { GATE.decline(b.getAttribute("data-dc")); };
       });
+      [].forEach.call(document.querySelectorAll("[data-rz-code]"), function (b) {
+        b.onclick = function () {
+          GATE.setReason(b.getAttribute("data-rz-key"), b.getAttribute("data-rz-code"));
+        };
+      });
       [].forEach.call(document.querySelectorAll("[data-ch]"), function (inp) {
         inp.oninput = function () { GATE.setChannel(inp.getAttribute("data-ch"), inp.value); };
       });
@@ -198,11 +235,20 @@
       approve: function (key) {
         var s = tier3State[key] || (tier3State[key] = {});
         s.approved = true;
+        s.reason = null;      // an approval carries no decline reason (#380)
+        submitError = "";
         render();
       },
       decline: function (key) {
         var s = tier3State[key] || (tier3State[key] = {});
         s.approved = false;
+        render();             // reveals the reason picker; reason still unset
+      },
+      setReason: function (key, code) {
+        var s = tier3State[key] || (tier3State[key] = {});
+        s.approved = false;   // choosing a reason is itself a decline
+        s.reason = code;
+        submitError = "";
         render();
       },
       setChannel: function (key, val) {
@@ -214,6 +260,19 @@
         render();
       },
       submit: function () {
+        // #380: an explicitly-declined op must carry a reason before submit.
+        // (Undecided rows — approved === undefined — are allowed; they submit as
+        // not-approved with no reason, unchanged from before.)
+        var missing = tier3.filter(function (op) {
+          var d = tier3State[op.gateKey] || {};
+          return d.approved === false && !d.reason;
+        });
+        if (missing.length) {
+          submitError = missing.length + " declined op(s) need a reason before you can submit.";
+          render();
+          return;
+        }
+        submitError = "";
         fire("gate:" + JSON.stringify(payload()));
         submitted = true;
         render();

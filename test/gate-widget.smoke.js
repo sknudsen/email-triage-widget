@@ -107,5 +107,37 @@ ok("undecided su op -> approved:false (fail-closed)", su.approved === false);
 ok("su channel captured even when undecided", su.channel === "Work");
 ok("post-submit confirmation shown", document.body.textContent.includes("Gate submitted"));
 
+console.log("== #380 decline reason ==");
+// Fresh gate instance (initGate rebuilds state in a new closure).
+lastPrompt = null;
+window.initGate(cfg);
+window.GATE.decline("batch-A|2|E3|pa");
+ok("#380 declining reveals the reason picker",
+  !!document.querySelector('[data-rz-key="batch-A|2|E3|pa"]'));
+window.GATE.submit();
+ok("#380 submit blocked when a decline has no reason", lastPrompt === null);
+ok("#380 block message shown", document.body.textContent.includes("need a reason"));
+window.GATE.setReason("batch-A|2|E3|pa", "plan-wrong");
+ok("#380 chosen reason highlights",
+  document.querySelector('[data-rz-key="batch-A|2|E3|pa"][data-rz-code="plan-wrong"]').classList.contains("on"));
+window.GATE.submit();
+ok("#380 submit fires once a reason is chosen", lastPrompt && lastPrompt.indexOf("gate:") === 0);
+const p380 = JSON.parse(lastPrompt.slice("gate:".length));
+const pa380 = p380.tier3.find((t) => t.gateKey === "batch-A|2|E3|pa");
+ok("#380 declined op -> approved:false with structured reason",
+  pa380.approved === false && pa380.reason === "plan-wrong");
+
+// Flipping a declined op back to approve must clear its reason.
+lastPrompt = null;
+window.initGate(cfg);
+window.GATE.decline("batch-A|2|E3|pa");
+window.GATE.setReason("batch-A|2|E3|pa", "misclick");
+window.GATE.approve("batch-A|2|E3|pa");
+window.GATE.submit();
+const p380b = JSON.parse(lastPrompt.slice("gate:".length));
+const pa380b = p380b.tier3.find((t) => t.gateKey === "batch-A|2|E3|pa");
+ok("#380 approve clears any prior decline reason",
+  pa380b.approved === true && pa380b.reason === null);
+
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
