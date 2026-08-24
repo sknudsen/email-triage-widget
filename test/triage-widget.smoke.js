@@ -582,7 +582,7 @@ const xss = { id: "X1", sender: "<b>e</b>vil@x.dk", date: "Mon <09:00>", subject
 window.initTriage({ batch: 1, total: 1, emails: [xss], tree, deferSubfolders });
 ok("#266 no <img> element injected from subject", document.querySelector("#tw-card img") === null);
 ok("#266 no <script> element injected from bodyPreview", document.querySelector("#tw-card script") === null);
-ok("#266 no <b> element injected from sender", document.querySelector(".tw-meta b") === null);
+ok("#266 no <b> element injected from sender", document.querySelector("#tw-card b") === null);
 ok("#266 bodyPreview survives as escaped text (not markup)", document.querySelector(".tw-body").textContent.includes("<script>alert('p')</script>"));
 ok("#266 subject survives as escaped text", document.querySelector(".tw-subj").textContent.includes("<img src=x onerror=alert(1)>hi"));
 ok("#266 threadRef survives as escaped text in the chip title",
@@ -603,12 +603,17 @@ ok("#18 .tw-dtag no longer uses margin-left:auto", !/\.tw-dtag\{[^}]*margin-left
 ok("#18 .tw-dtag sits in its own grid column (justify-self:end)", /\.tw-dtag\{[^}]*justify-self:end/.test(STYLE));
 window.initTriage({ batch: 1, total: 2, emails: [mkP(0), mkP(1)], tree });
 ok("#18 header rendered as .tw-meta grid", !!document.querySelector(".tw-meta"));
-ok("#18 From + Date labels both present", (() => { const ks = [...document.querySelectorAll(".tw-meta .tw-k")].map((k) => k.textContent); return ks.includes("From") && ks.includes("Date"); })());
+// #17 (S139): From lives in .tw-parties (beside To); Date lives in .tw-meta.
+ok("#18 From (parties) + Date (meta) labels both present", (() => {
+  const pk = [...document.querySelectorAll(".tw-parties .tw-k")].map((k) => k.textContent);
+  const mk = [...document.querySelectorAll(".tw-meta .tw-k")].map((k) => k.textContent);
+  return pk.includes("From") && mk.includes("Date");
+})());
 document.querySelectorAll(".tw-dot")[0].onclick();
 window.TW.decide("ar");                                   // decide E0, cursor advances to E1
 document.querySelectorAll(".tw-dot")[0].onclick();        // back to the decided E0
-ok("#18 decided card renders .tw-dtag inside the grid", !!document.querySelector(".tw-meta .tw-dtag"));
-ok("#18 From label still present alongside the tag (not collapsed)", [...document.querySelectorAll(".tw-meta .tw-k")].some((k) => k.textContent === "From"));
+ok("#18 decided card renders .tw-dtag in the parties row", !!document.querySelector(".tw-parties .tw-dtag"));
+ok("#18 From label still present alongside the tag (not collapsed)", [...document.querySelectorAll(".tw-parties .tw-k")].some((k) => k.textContent === "From"));
 
 /* ===== #331/2 thread chip on the subject line (retires the #263 reserved row) =====
    #263 kept a full-width thread row on every card, empty when there was no
@@ -682,7 +687,7 @@ const named = { id: "NM", sender: "Jonas Holm", senderAddress: "jonas@x.dk", dat
   bodyPreview: "b", badgeLabel: "Defer", badgeClass: "badge-df", suggestedAction: "df",
   suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
 window.initTriage({ batch: 1, total: 1, emails: [named], tree });
-ok("#270 display name rendered in the From value", document.querySelector(".tw-meta .tw-v").textContent.includes("Jonas Holm"));
+ok("#270 display name rendered in the From value", document.querySelector(".tw-party .tw-v").textContent.includes("Jonas Holm"));
 ok("#270 address rendered as a second muted line", !!document.querySelector(".tw-vaddr") && document.querySelector(".tw-vaddr").textContent === "jonas@x.dk");
 
 // address equals the display name (no envelope name) -> no duplicate second line
@@ -698,7 +703,7 @@ const noAddr = { id: "NA", sender: "team@x.dk", date: "Mon", subject: "s",
   suggestedPath: null, reason: "r", annotation: null, threadRef: null, suggestion: null };
 window.initTriage({ batch: 1, total: 1, emails: [noAddr], tree });
 ok("#270 degrades to single From string when senderAddress absent",
-  document.querySelector(".tw-vaddr") === null && document.querySelector(".tw-meta .tw-v").textContent.includes("team@x.dk"));
+  document.querySelector(".tw-vaddr") === null && document.querySelector(".tw-party .tw-v").textContent.includes("team@x.dk"));
 
 // #266: a hostile address must be escaped, never injected as markup
 const evilAddr = { id: "EA", sender: "Mallory", senderAddress: "<b>x</b>@x.dk", date: "Mon", subject: "s",
@@ -1438,6 +1443,140 @@ const nfRow2 = JSON.parse(lastPrompt.slice(6))[0];
 ok("#405f a genuinely new name is still proposed",
   nfRow2.user_typed_params.destination === ".PARA-work/1_Current_projects/Zephyr"
   && nfRow2.user_typed_params.folderState === "proposed");
+
+console.log("== #17 To recipients on outbound cards ==");
+const mkOut = (id, source, to) => ({
+  id, sender: "me@audiomind.dk", date: "Mon 09 Jun 09:00",
+  subject: "Re: paper", bodyPreview: "…", source, to,
+  badgeLabel: "Keep", badgeClass: "badge-un", suggestedAction: null,
+  reason: "", annotation: null, threadRef: null, suggestion: null,
+});
+window.initTriage({ batch: 1, total: 1, emails: [mkOut("SNT", "sent", ["sohj@ruc.dk", "co@x.dk"])], tree });
+const parties = () => document.querySelector(".tw-parties").textContent;
+ok("#17 To is a column beside From with both recipients",
+  /From/.test(parties()) && /To/.test(parties()) && parties().includes("sohj@ruc.dk") && parties().includes("co@x.dk"), parties());
+// #17 (S139): To is always shown — an inbox card (recipient = the operator) shows
+// it too. A card with no `to` shows a muted "(none)", never a blank column.
+window.initTriage({ batch: 1, total: 1, emails: [mkOut("INB", "inbox", ["soren@audiomind.dk"])], tree });
+ok("#17 inbox card shows the To column too (always visible)",
+  parties().includes("soren@audiomind.dk"));
+window.initTriage({ batch: 1, total: 1, emails: [mkOut("NOR", "inbox", null)], tree });
+ok("#17 no recipient -> muted (none), not a blank column",
+  !!document.querySelector(".tw-tonone"));
+
+console.log("== #286 dev-note + #404 time-on-card ==");
+let clk = 0;
+window.__twNow = () => clk;
+const mkN = (id) => ({
+  id, sender: "a@x.dk", date: "Mon 09 Jun 09:00", subject: "S " + id,
+  bodyPreview: "…", badgeLabel: "Keep", badgeClass: "badge-un",
+  suggestedAction: null, reason: "", annotation: null, threadRef: null, suggestion: null,
+});
+clk = 0;
+window.initTriage({ batch: 1, total: 2, emails: [mkN("N0"), mkN("N1")], tree }); // card0 enters at 0
+// type a dev-note on card0, then decide it (advance flushes card0's first interval)
+clk = 100;
+const dn = document.getElementById("tw-devnote");
+dn.value = "looks off — matched own surname?";
+dn.dispatchEvent(new window.Event("input"));
+ok("#286 dev-note input present on card", !!dn);
+window.TW.decide("sk"); // decisions[0]; advance -> card1 enters at 100; card0 dwell = 100
+clk = 250;
+window.TW.decide("sk"); // decisions[1]; advance -> completion; card1 dwell = 150
+clk = 400;
+document.querySelectorAll(".tw-dot")[0].onclick(); // back to card0 (accumulate), enters at 400
+clk = 550;
+document.querySelectorAll(".tw-dot")[1].onclick(); // card0 second interval += 150 -> 250; card1 enters 550
+clk = 700;
+lastPrompt = null; window.TW.submit(); // flush card1 += 150 -> 300
+const rows286 = JSON.parse(lastPrompt.slice(6));
+const r0 = rows286.find((r) => r.emailId === "N0");
+const r1 = rows286.find((r) => r.emailId === "N1");
+ok("#286 dev-note rides the submitted row", r0.devNote === "looks off — matched own surname?", JSON.stringify(r0.devNote));
+ok("#286 a card with no note carries devNote:null", r1.devNote === null, JSON.stringify(r1.devNote));
+ok("#404 time-on-card accumulates across paging away and back (100+150=250)", r0.timeOnCardMs === 250, "got " + r0.timeOnCardMs);
+ok("#404 second card's dwell accumulates too (150+150=300)", r1.timeOnCardMs === 300, "got " + r1.timeOnCardMs);
+delete window.__twNow;
+
+console.log("== #375 thread grouping + newest marker ==");
+const mkTh = (id, conv, newest) => ({
+  id, sender: "a@x.dk", date: "Mon 09 Jun 09:00", subject: "re: " + conv,
+  conversationId: conv, threadNewest: !!newest, threadCount: 1,
+  badgeLabel: "Keep", badgeClass: "badge-un", suggestedAction: null,
+  reason: "", annotation: null, threadRef: null, suggestion: null,
+});
+window.initTriage({ batch: 1, total: 2, emails: [mkTh("T1", "C", false), mkTh("T2", "C", true)], tree });
+ok("#375 non-newest thread card shows no newest chip", !/tw-newest/.test(document.getElementById("tw-card").innerHTML));
+document.querySelectorAll(".tw-dot")[1].onclick();
+ok("#375 newest thread card shows the newest chip", /tw-newest/.test(document.getElementById("tw-card").innerHTML));
+// thread-aware paging: a 2-card thread at indices 12-13 must not straddle the
+// fixed-13 page boundary — it is pushed whole to the next page, so page 1 holds
+// 12 cards (not 13) and the thread sits together on page 2.
+const many = [];
+for (let i = 0; i < 15; i++) many.push(mkTh("P" + i, (i === 12 || i === 13) ? "TH" : ("U" + i), false));
+window.initTriage({ batch: 1, total: 15, emails: many, tree });
+ok("#375 straddling thread pushed off page 1 (page 1 holds 12, not 13)",
+  document.getElementById("tw-pos").textContent === "1 of 12", document.getElementById("tw-pos").textContent);
+ok("#375 two pages total (12 + 3)", /Page 1 of 2/.test(document.getElementById("tw-page").textContent),
+  document.getElementById("tw-page").textContent);
+
+console.log("== #343 within-run decision propagation to thread siblings ==");
+const mkSib = (id) => ({
+  id, sender: "a@x.dk", date: "Mon 09 Jun 09:00", subject: "re: MSCA at RUC",
+  conversationId: "MSCA", threadNewest: false, threadCount: 1,
+  badgeLabel: "none", badgeClass: "badge-un", suggestedAction: null,
+  reason: "", annotation: null, threadRef: null, suggestion: null,
+});
+window.initTriage({ batch: 1, total: 3, emails: [mkSib("M0"), mkSib("M1"), mkSib("M2")], tree });
+window.TW.decide("sk"); // decide M0 = keep; advances to M1
+ok("#343 undecided sibling shows a propagation banner", /tw-prop/.test(document.getElementById("tw-card").innerHTML));
+ok("#343 the offered action button is highlighted (.prop on sk)", document.getElementById("btn-sk").classList.contains("prop"));
+window.TW.decide("sk"); // accept the propagated offer on M1
+document.querySelectorAll(".tw-dot")[2].onclick(); // to M2
+window.TW.decide("do"); // OVERRIDE the offer on M2 (do, not keep)
+lastPrompt = null; window.TW.submit();
+const pr = JSON.parse(lastPrompt.slice(6));
+const m1 = pr.find((r) => r.emailId === "M1");
+const m2 = pr.find((r) => r.emailId === "M2");
+ok("#343 accepting the offer stamps propagatedFrom (not a Stage-2 agreement)",
+  m1.propagatedFrom && m1.propagatedFrom.emailId === "M0", JSON.stringify(m1.propagatedFrom));
+ok("#343 overriding the offer carries NO propagatedFrom (a free decision)",
+  m2.propagatedFrom === undefined, JSON.stringify(m2.propagatedFrom));
+ok("#343 the source decision itself carries no propagatedFrom",
+  pr.find((r) => r.emailId === "M0").propagatedFrom === undefined);
+
+console.log("== #340 evidence hover + #20 glossary tooltips ==");
+const GL = { reason: "Why Stage 2 suggested this.", badge: "Stage 2's suggested action.", dot: "One email." };
+const evCard = {
+  id: "EV", sender: "k@diku.dk", date: "Mon 09 Jun 09:00", subject: "position?",
+  bodyPreview: "…", badgeLabel: "PARA folder", badgeClass: "badge-pa",
+  suggestedAction: "pa", suggestedPath: ".PARA-work/2_Areas/Kasper", reason: "Sender map match",
+  evidence: { actionConfidence: 0.3, parameterisationReasons: "L5 llm", senderNote: "possible position" },
+  annotation: null, threadRef: null, suggestion: { emailId: "EV", action: "pa" },
+};
+window.initTriage({ batch: 1, total: 1, emails: [evCard], tree, glossary: GL });
+const sugTip = () => document.querySelector(".tw-sug").getAttribute("data-tip");
+ok("#340 one combined hover on the whole suggestion area carries the evidence",
+  /confidence 0.3/.test(sugTip()) && /possible position/.test(sugTip()) && /why here/.test(sugTip()), sugTip());
+ok("#340 the combined tip includes the reason and path",
+  /Sender map match/.test(sugTip()) && /Kasper/.test(sugTip()));
+ok("#340 no ⓘ marker (removed — clashed with the i details keybind)",
+  !/tw-evi/.test(document.getElementById("tw-card").innerHTML) && !document.getElementById("tw-card").innerHTML.includes("ⓘ"));
+ok("#20 hovering the badge resolves the same combined tip (badge is inside .tw-sug)",
+  document.querySelector(".tw-badge").closest(".tw-sug").getAttribute("data-tip") === sugTip());
+ok("#20/#340 tooltips are the custom fast tip (data-tip), not native title",
+  !document.querySelector(".tw-sug").getAttribute("title") && !!sugTip());
+// evidence absent -> combined tip falls back to the glossary reason tip
+const plain = Object.assign({}, evCard, { id: "EV2", evidence: null });
+window.initTriage({ batch: 1, total: 1, emails: [plain], tree, glossary: GL });
+ok("#340/#20 no evidence -> tip is the reason + path (no confidence line)",
+  /Sender map match/.test(sugTip()) && !/confidence/.test(sugTip()));
+// no glossary + no evidence on a no-suggestion card -> no tip, no error
+const noSugCard = { id: "EV3", sender: "a@x.dk", date: "d", subject: "s", bodyPreview: "b",
+  badgeLabel: "none", badgeClass: "badge-un", suggestedAction: null, reason: "", suggestion: null };
+window.initTriage({ batch: 1, total: 1, emails: [noSugCard], tree });
+ok("#20 no-suggestion + no glossary -> suggestion area has no tip (graceful)",
+  !document.querySelector(".tw-sug").getAttribute("data-tip"));
 
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);

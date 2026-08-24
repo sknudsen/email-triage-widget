@@ -88,6 +88,20 @@
     // When present, the su field gets a type-to-filter dropdown over them; the
     // field stays free-text (an unlisted channel, or empty = let Sunsama predict).
     const channels = (cfg.channels && cfg.channels.length) ? cfg.channels.slice() : [];
+    // #20: tooltip/legend wording from the dedicated glossary file (cfg.glossary).
+    // A hover is rendered only where a key is present; a missing glossary means no
+    // tooltips, never an error. gloss(k) returns a ready-to-drop ' title="…"'
+    // attribute (escaped) or "" — so every call site is a one-liner.
+    const GLOSSARY = (cfg.glossary && typeof cfg.glossary === "object") ? cfg.glossary : {};
+    // #20/#340 (S139): tooltips are a custom fast tip (see the tw-tip wiring after
+    // the template), not native `title` — the browser's title delay was too slow
+    // and the ⓘ affordance clashed with the "i" details keybind. gloss(k) emits a
+    // ` data-tip="…"` attribute; a single delegated hover shows one tip for the
+    // element, appearing quickly.
+    function gloss(k) {
+      const v = GLOSSARY[k];
+      return v ? ' data-tip="' + escAttr(String(v)) + '"' : "";
+    }
     const root = document.getElementById("tw-root");
     /* #290 render tuning (stage3-tuning.yaml → assemble_config → cfg.widget):
        apply the card min-height floor + bodyPreview scroll-cap as CSS custom
@@ -136,13 +150,47 @@
        is a global index into `emails`; navigation/dots/submit are scoped to the
        current page. */
     const PAGE_SIZE = 13;
-    const pageCount = Math.max(1, Math.ceil(emails.length / PAGE_SIZE));
+    // #375: thread-aware paging. The producer already orders same-thread cards
+    // contiguously (newest-first); here we pack them into pages of AT MOST
+    // PAGE_SIZE without ever splitting a thread across a page boundary — so a
+    // conversation is decided together, on one page, the co-location the S127 run
+    // showed was what let a thread be handled coherently. A thread larger than a
+    // page is the one unavoidable exception: it takes a page of its own and spans
+    // (there is no page that holds it whole). Pages are computed once; every
+    // page/one-index-to-page lookup goes through `pages`/`pageOf`, so the fixed
+    // i→page arithmetic the resume/stop paths used can never disagree with the
+    // boundaries actually rendered.
+    const pages = (function buildPages() {
+      const out = [];
+      let i = 0;
+      while (i < emails.length) {
+        const start = i;
+        let count = 0;
+        while (i < emails.length) {
+          const conv = emails[i] && emails[i].conversationId;
+          let blk = 1;
+          if (conv) { while (i + blk < emails.length && emails[i + blk].conversationId === conv) blk++; }
+          // Place the whole thread block if it fits, or if the page is still
+          // empty (an oversized thread gets its own page rather than being split).
+          if (count > 0 && count + blk > PAGE_SIZE) break;
+          count += blk; i += blk;
+          if (count >= PAGE_SIZE) break;
+        }
+        out.push({ start: start, end: start + count });
+      }
+      if (!out.length) out.push({ start: 0, end: 0 });
+      return out;
+    })();
+    const pageCount = pages.length;
+    function pageOf(i) {
+      for (let p = 0; p < pages.length; p++) if (i >= pages[p].start && i < pages[p].end) return p;
+      return pages.length - 1;
+    }
     let curPage = 0;
     let stopped = false;       // Stop ends the sitting (terminal screen)
     const submittedPages = {}; // page index -> true once its batch is submitted
     function pageBounds(p) {
-      const start = p * PAGE_SIZE;
-      return { start: start, end: Math.min(start + PAGE_SIZE, emails.length) };
+      return pages[p] || { start: 0, end: 0 };
     }
     function pageDecidedCount(p) {
       const b = pageBounds(p);
@@ -161,6 +209,87 @@
     // to the decided cards stays available (it is not a terminal overlay).
     let showCompletion = false;
     const decisions = emails.map(() => null);
+    // #286: per-card development note, keyed by emailId. Captured independent of
+    // the action (a note ABOUT the card, not an action parameter) and folded into
+    // the emitted row at submit — so it survives the operator changing their mind
+    // about the action, and never rides user_typed_params where the carrier would
+    // read it as one.
+    const cardNotes = {};
+    // #404: accumulated wall-clock time-on-card in ms, keyed by emailId. Every
+    // change of `cur` routes through render(), which flushes the previous card's
+    // open interval and opens one for the card now shown — so paging away and back
+    // ACCUMULATES onto the same card (a return is more deciding of the same
+    // decision, not a new one), never resets. Wall-clock, so it silently includes
+    // interruptions — a stated limitation (#404), not corrected for by guessing.
+    const dwellMs = {};
+    let dwellCardId = null, dwellEnterAt = null;
+    // Overridable clock so the smoke can drive time-on-card deterministically;
+    // the browser uses Date.now(). Never Math.random/argless Date elsewhere.
+    function nowMs() {
+      return (typeof window !== "undefined" && window.__twNow) ? window.__twNow() : Date.now();
+    }
+    function dwellFlush() {
+      if (dwellCardId !== null && dwellEnterAt !== null) {
+        dwellMs[dwellCardId] = (dwellMs[dwellCardId] || 0) + (nowMs() - dwellEnterAt);
+      }
+      dwellCardId = null; dwellEnterAt = null;
+    }
+    /* Fold the per-card #286 note and #404 duration onto a decision row at submit.
+     * Semantics pinned by the smoke: timeOnCardMs is the total wall-clock the card
+     * was the active view, summed across every visit up to submit (accumulate, not
+     * enter→first-commit); devNote is the trimmed note or null. Additive fields —
+     * the carrier reads neither, so an old carrier is unaffected. */
+    function finalizeRow(row, id) {
+      const out = Object.assign({}, row);
+      const note = (cardNotes[id] || "").trim();
+      out.devNote = note || null;        // #286
+      out.timeOnCardMs = dwellMs[id] || 0; // #404
+      return out;
+    }
+    // #343: within-run decision propagation. When a decision lands on a card, its
+    // still-undecided same-conversation siblings should OFFER the operator's own
+    // choice instead of continuing to show a Stage 2 suggestion he has just
+    // contradicted (on `Re: MSCA at RUC` he made the same call four times while the
+    // widget kept offering the old one). Keyed by card index -> {action,
+    // decisionKey, fromId}. Recomputed from scratch on every render so it always
+    // reflects the current decisions — changing or clearing the source decision
+    // re-derives the offers (the issue's "undo" question, answered by
+    // recomputation rather than a bespoke reversal path). Only UNDECIDED siblings
+    // receive an offer; a decided card is never overwritten.
+    //
+    // Load-bearing marking: an accepted propagation must NOT look like agreement
+    // with Stage 2, or it would credit Stage 2 for the operator's own prior
+    // decision and corrupt the #295/#148 baseline. So a decision whose action
+    // equals the offered one carries `propagatedFrom` (see buildDecision); it is a
+    // default to override, never a constraint.
+    const propagated = {};
+    // #286: the bottom dev-note tracks the current card. `devNoteId` is the emailId
+    // its value belongs to; renderDevNote re-seeds it on each card change, and null
+    // (the completion card) clears + disables it.
+    let devNoteId = null;
+    function renderDevNote(id) {
+      const el = $("tw-devnote");
+      if (!el) return;
+      devNoteId = id != null ? id : null;
+      if (devNoteId == null) { el.value = ""; el.disabled = true; return; }
+      el.disabled = false;
+      el.value = cardNotes[devNoteId] || "";
+    }
+    function recomputePropagation() {
+      for (const k in propagated) delete propagated[k];
+      for (let i = 0; i < emails.length; i++) {
+        const d = decisions[i];
+        if (!d) continue;
+        const conv = emails[i] && emails[i].conversationId;
+        if (!conv) continue;
+        for (let j = 0; j < emails.length; j++) {
+          if (j === i || decisions[j]) continue;
+          if (emails[j] && emails[j].conversationId === conv) {
+            propagated[j] = { action: d.action, decisionKey: d.decisionKey, fromId: emails[i].id };
+          }
+        }
+      }
+    }
     let detailsOpen = false; // S40 details panel: sticky across navigation
     let activePanel = null,
       wdAction = null, // 'wa' | 'df' — which action opened the shared wait/defer panel
@@ -212,8 +341,12 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .badge-ar,.badge-df,.badge-wa,.badge-un{background:var(--color-background-secondary);color:var(--color-text-secondary)}
 .badge-de{background:var(--color-background-danger);color:var(--color-text-danger)}
 .tw-reason{font-size:13px;color:var(--color-text-secondary);line-height:1.5}
+.tw-sug{display:flex;align-items:flex-start;gap:10px;cursor:help}
+.tw-tip{position:absolute;z-index:50;max-width:320px;white-space:pre-line;background:var(--color-background-primary,#fff);color:var(--color-text-primary);border:1px solid var(--color-border-secondary,#ccc);border-radius:6px;padding:6px 9px;font-size:12px;line-height:1.45;box-shadow:0 4px 14px rgba(0,0,0,.18);pointer-events:none}
 .tw-body{font-size:12px;color:var(--color-text-tertiary);line-height:1.5;margin:4px 0 0;white-space:pre-line;max-height:var(--tw-body-max-h,126px);overflow-y:auto}
 .tw-spath{font-size:11px;color:var(--color-text-tertiary);font-family:var(--font-mono,monospace);margin-top:2px}
+.tw-prop{font-size:12px;color:var(--color-text-info);background:var(--color-bg-info-subtle,rgba(25,103,210,.10));border-radius:4px;padding:2px 8px;margin-top:4px}
+.tw-a.prop{outline:2px dashed var(--color-border-info);outline-offset:1px}
 /* #311 plan-escalation mark: sits under the suggested path, and becomes the
    confirm target once \`ag\` is armed. Warning-toned unarmed (a consequence, not
    an error); when armed it gains a ring + pulse and reads as a control. */
@@ -228,9 +361,14 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 @media (prefers-reduced-motion:reduce){.tw-esc.armed{animation:none}}
 .tw-sent{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:6px 10px;margin-top:8px}
 .tw-thc{font-size:12px;font-weight:400;color:var(--color-text-info);margin-left:8px;white-space:nowrap;cursor:help}
+.tw-newest{font-size:11px;font-weight:600;color:var(--color-text-success,#2e7d32);background:var(--color-bg-success-subtle,rgba(46,125,50,.12));border-radius:4px;padding:1px 6px;margin-left:8px;white-space:nowrap;cursor:help;text-transform:uppercase;letter-spacing:.03em}
 .tw-meta{display:grid;grid-template-columns:auto 1fr auto;column-gap:8px;row-gap:4px;align-items:baseline;margin-bottom:4px}
 .tw-vaddr{display:block;font-size:11px;font-weight:400;color:var(--color-text-tertiary)}
+.tw-tonone{font-size:12px;color:var(--color-text-tertiary)}
 .tw-dtag{font-size:11px;padding:2px 8px;border-radius:var(--border-radius-md);background:var(--color-background-success);color:var(--color-text-success);justify-self:end}
+.tw-parties{display:flex;gap:16px;align-items:flex-start;margin-bottom:4px}
+.tw-party{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.tw-parties .tw-dtag{flex:0 0 auto;align-self:flex-start}
 .tw-ydec{font-size:12px;font-weight:600;color:var(--color-text-success);margin-top:6px;display:flex;align-items:center;gap:6px}
 .tw-ydec .tw-ac{font-size:10px;color:var(--color-text-success);font-family:var(--font-mono)}
 .tw-ydec .tw-ydest{font-family:var(--font-mono,monospace);font-weight:500}
@@ -318,7 +456,12 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 .tw-pfh{font-style:normal;font-size:10px;color:var(--color-text-info)}
 .tw-req{font-size:11px;color:var(--color-text-danger);margin-top:6px;display:none}
 .tw-hint{font-size:11px;color:var(--color-text-tertiary);margin-top:6px}
-.tw-pr{text-align:right;margin-top:4px}`;
+.tw-pr{text-align:right;margin-top:4px}
+.tw-notebar{margin-top:14px;padding-top:10px;border-top:1px dashed var(--color-border-tertiary);display:flex;flex-direction:column;gap:4px}
+.tw-notelbl{font-size:12px;color:var(--color-text-secondary)}
+.tw-notemeta{color:var(--color-text-tertiary)}
+.tw-devnote-in{width:100%;padding:6px 8px;font-size:13px;border:1px solid var(--color-border-tertiary);border-radius:var(--border-radius-md,6px);background:var(--color-background-secondary);color:var(--color-text-primary)}
+.tw-devnote-in:disabled{opacity:.5}`;
     document.head.appendChild(style);
 
     /* --- Build HTML --- */
@@ -354,6 +497,10 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
   <div id="tw-stopbar" class="tw-stopbar" style="display:none"><span id="tw-stopmsg"></span><button class="tw-cb" id="tw-stopok" onclick="TW.confirmStop()">Confirm stop</button><button class="tw-nbtn" onclick="TW.cancelStop()">Cancel</button></div>
   <div class="tw-pgnav"><button class="tw-nbtn" id="tw-ppage" onclick="TW.goPage(-1)">◀ Page</button><span class="tw-lbl" id="tw-pgcount"></span><button class="tw-nbtn" id="tw-npage" onclick="TW.goPage(1)">Page ▶</button></div>
   <div class="tw-sr"><span class="tw-lbl" id="tw-gp"></span><button class="tw-sb" id="tw-sub" disabled onclick="TW.submit()">Submit page</button><button class="tw-sb" id="tw-nextpage" style="display:none" onclick="TW.goPage(1)">Next page →</button></div>
+  <!-- #286 (S139): the dev-note sits at the very bottom, below every decision
+       surface, so it reads as the temporary meta-note it is — a note ABOUT the
+       card, not part of it. Its value tracks the current card (renderDevNote). -->
+  <div class="tw-notebar"><label class="tw-notelbl" for="tw-devnote">Note for the current card <span class="tw-notemeta">(saved with your decision · optional)</span></label><input type="text" id="tw-devnote" class="tw-devnote-in" placeholder="jot a development note…" autocomplete="off"/></div>
 </div>`;
 
     /* --- Helpers --- */
@@ -384,6 +531,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       for (let i = b.start; i < b.end; i++) {
         const d = document.createElement("span");
         d.className = "tw-dot" + (decisions[i] ? " decided" : "") + (i === cur ? " current" : "");
+        if (GLOSSARY.dot) d.dataset.tip = GLOSSARY.dot; // #20 (custom tip, not native title)
+
         // #311: the dot strip is navigation like ← →, so it disarms too. Without
         // this, an arm abandoned by clicking away resurrects when the operator
         // clicks back — armed with no fresh `ag` press, one Enter from committing.
@@ -408,13 +557,21 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
 
     function render() {
       closeAll();
-      if (showCompletion) { renderCompletion(); return; } // #21
+      // #404: every cur change ends here, so this is the one place that owns the
+      // time-on-card interval. Flush the card we are leaving, then (for a real
+      // card only) open a fresh interval below once `cur` is known. The completion
+      // card is not a decision and opens no interval.
+      dwellFlush();
+      recomputePropagation(); // #343: refresh sibling offers from current decisions
+      if (showCompletion) { renderDevNote(null); renderCompletion(); return; } // #21
       // Action grid + keyboard hint are inert on the completion card; restore them
       // here so a normal render always shows them (idempotent).
       const bg = document.querySelector(".tw-bg"); if (bg) bg.style.display = "";
       const kh = document.querySelector(".tw-kh"); if (kh) kh.style.display = "";
       $("tw-sub").style.display = ""; $("tw-nextpage").style.display = "none";
       const e = emails[cur];
+      // #404: open the time-on-card interval for the card now shown.
+      if (e) { dwellCardId = e.id; dwellEnterAt = nowMs(); }
       const pb = pageBounds(curPage);
       let h = '<div class="tw-card' + (detailsOpen ? " open" : "") + '">';
       // Thread line (#214 mix): the run-level part comes baked from Stage 3
@@ -453,6 +610,14 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       const thrChip = (thrLabel && thr)
         ? '<span class="tw-thc" title="' + escAttr(thr) + '">🔗 ' + thrLabel + "</span>"
         : "";
+      // #375: mark the newest message in a thread, so the operator can tell the
+      // head of a conversation from a stale middle — the defect `threadRef`'s bare
+      // count never surfaced. Only the producer's per-thread newest carries the
+      // flag; singletons and older members do not, so the chip appears only where
+      // it distinguishes something.
+      const newestChip = e.threadNewest
+        ? '<span class="tw-newest"' + (gloss("newest") || ' title="Newest message in this thread"') + ">newest</span>"
+        : "";
       // #18: From/Date as one aligned label·value·tag grid (.tw-meta). The decision
       // tag sits in its own grid column, so it can never collapse "From" against the
       // sender (the old .tw-mr space-between + margin-left:auto bug). #266: every
@@ -462,27 +627,66 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // only when it's present AND differs from the display name (when the
       // envelope had no name, sender already IS the address — no double line).
       // #266: both strings HTML-escaped before innerHTML.
+      // From value: display name + the raw address on a second muted line (only
+      // when present AND different — an envelope with no name already IS the
+      // address). #266: every email-derived string HTML-escaped.
       var fromVal = escHtml(e.sender);
       if (e.senderAddress && e.senderAddress !== e.sender) {
         fromVal += '<span class="tw-vaddr">' + escHtml(e.senderAddress) + "</span>";
       }
-      h += '<div class="tw-meta"><span class="tw-k">From</span><span class="tw-v">' + fromVal + "</span>";
-      h += decisions[cur] ? '<span class="tw-dtag">✓ ' + escHtml(decisions[cur].decisionKey.toUpperCase()) + "</span>" : "<span></span>";
-      h += '<span class="tw-k">Date</span><span class="tw-v">' + escHtml(e.date) + "</span><span></span>";
-      // #14: show the email's current folder on the card face (its own meta row),
-      // so the operator sees where it lives now without opening details. The
-      // producer emits currentFolder from the Stage 1 snapshot's
-      // currentFolder.path; the row is omitted when absent. #266: escaped.
-      if (e.currentFolder) h += '<span class="tw-k">Folder</span><span class="tw-v tw-cfv">' + escHtml(e.currentFolder) + "</span><span></span>";
+      // #17 (S139): To is a permanent column beside From, styled the same — the
+      // first recipient on the value line, any others as muted address lines.
+      // The snapshot carries addresses only (no names), so To shows addresses.
+      // On an inbox-side card this is usually the operator himself, by design.
+      var toVal;
+      if (e.to && e.to.length) {
+        toVal = escHtml(e.to[0]);
+        for (var ti = 1; ti < e.to.length; ti++) toVal += '<span class="tw-vaddr">' + escHtml(e.to[ti]) + "</span>";
+      } else {
+        toVal = '<span class="tw-tonone">(none)</span>';
+      }
+      // #18/#270 shape, now a two-party header: From | To side by side, decision
+      // tag at the end.
+      h += '<div class="tw-parties">';
+      h += '<div class="tw-party"><span class="tw-k">From</span><span class="tw-v">' + fromVal + "</span></div>";
+      h += '<div class="tw-party"' + gloss("to") + '><span class="tw-k">To</span><span class="tw-v">' + toVal + "</span></div>";
+      h += decisions[cur] ? '<span class="tw-dtag">✓ ' + escHtml(decisions[cur].decisionKey.toUpperCase()) + "</span>" : "";
       h += "</div>";
-      h += '<div class="tw-subj">' + escHtml(e.subject) + thrChip + "</div>";
+      // Date + current folder as a compact grid below the parties.
+      h += '<div class="tw-meta"><span class="tw-k">Date</span><span class="tw-v">' + escHtml(e.date) + "</span><span></span>";
+      // #14: the email's current folder, so the operator sees where it lives now
+      // without opening details. Omitted when absent. #266: escaped.
+      if (e.currentFolder) h += '<span class="tw-k"' + gloss("folder") + '>Folder</span><span class="tw-v tw-cfv">' + escHtml(e.currentFolder) + "</span><span></span>";
+      h += "</div>";
+      h += '<div class="tw-subj">' + escHtml(e.subject) + thrChip + newestChip + "</div>";
       if (e.bodyPreview) h += '<div class="tw-body">' + escHtml(e.bodyPreview) + "</div>";
       if (e.attachment) h += '<div class="tw-mr"><span class="tw-k">Attachments</span><span class="tw-v" style="color:var(--color-text-info)">' + escHtml(e.attachment) + "</span></div>";
       if (e.sentNotice) h += '<div class="tw-sent">📤 ' + escHtml(e.sentNotice) + "</div>";
       // #183: distinguish "Stage 2 saw it, no suggestion" from a blank card.
       const hasSug = !!e.suggestedAction;
       const badgeLabel = hasSug ? e.badgeLabel : "none";
-      h += '<hr class="tw-hr"><div style="display:flex;align-items:flex-start;gap:10px"><span class="tw-badge ' + e.badgeClass + '">' + badgeLabel + '</span><div style="flex:1;min-width:0">';
+      // #340/#20 (S139): ONE combined hover for the whole suggestion/explanation
+      // area — hovering the badge, the reason, or the path all show the same tip:
+      // the reason, the destination, and the computed-but-hidden evidence
+      // (confidence, why-this-destination, sender note). No ⓘ marker (it clashed
+      // with the "i" details keybind). matchMarker (the #337 catcher) is not here —
+      // it needs a Stage 2 carry (successor #424).
+      let sugTip = "";
+      if (hasSug) {
+        const parts = [e.reason];
+        if (e.suggestedPath) parts.push("→ " + e.suggestedPath);
+        const ev = e.evidence;
+        if (ev) {
+          if (ev.actionConfidence != null) parts.push("confidence " + ev.actionConfidence);
+          if (ev.parameterisationReasons) parts.push("why here: " + ev.parameterisationReasons);
+          if (ev.senderNote) parts.push("sender note: " + ev.senderNote);
+        }
+        sugTip = parts.filter(Boolean).join("\n");
+      } else {
+        sugTip = GLOSSARY.reason || "";
+      }
+      h += '<hr class="tw-hr"><div class="tw-sug"' + (sugTip ? ' data-tip="' + escAttr(sugTip) + '"' : "") +
+        '><span class="tw-badge ' + e.badgeClass + '">' + badgeLabel + '</span><div style="flex:1;min-width:0">';
       if (hasSug) {
         h += '<div class="tw-reason">' + escHtml(e.reason) + "</div>";
         if (e.suggestedPath) h += '<div class="tw-spath">→ ' + escHtml(e.suggestedPath) + "</div>";
@@ -501,6 +705,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       } else {
         h += '<div class="tw-reason tw-nosug">no Stage 2 suggestion</div>';
       }
+      // #343: a propagated offer on an undecided sibling. Shown as a distinct
+      // banner (never a silent rewrite of the card — the operator sees it came
+      // from his own decision, not from Stage 2) and the offered action's button
+      // is highlighted below. Choosing it stamps `propagatedFrom`; overriding is a
+      // free, unmarked decision. Only on undecided cards.
+      const offer = !decisions[cur] ? propagated[cur] : null;
+      if (offer) {
+        const offerLabel = DEC_LABELS[offer.action] || DEC_LABELS[offer.decisionKey] || offer.action;
+        h += '<div class="tw-prop"' + (gloss("propagated") || ' title="Carried from your decision on another message in this thread"') + ">↳ Propagated from your thread decision — suggests <b>" +
+          escHtml(offerLabel) + "</b></div>";
+      }
       // #196: echo the operator's own decision inline, right after the suggestion
       // text — where the eye already is — not only in the top-right corner tag.
       if (decisions[cur]) {
@@ -515,9 +730,21 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       }
       h += "</div>"; // close reason block
       h += '<button class="tw-iaff" onclick="TW.toggleDetails()" aria-label="Toggle details">' + (detailsOpen ? "close" : "details") + '<span class="tw-ac">i</span></button>';
-      h += "</div></div>"; // close pill row + tw-card
+      h += "</div>"; // close pill row (flex)
+      h += "</div>"; // close tw-card
       if (detailsOpen) h += buildDetails(e);
       $("tw-card").innerHTML = h;
+      // #286 (S139): the dev-note lives at the very BOTTOM of the widget, below
+      // every decision surface, so it reads as the temporary meta-note it is — not
+      // part of the card. It is a fixed element (`tw-devnote`) rendered once in the
+      // root template; here we just re-seed its value for the current card from the
+      // per-emailId store. `renderDevNote()` also runs from the completion card.
+      renderDevNote(e.id);
+      // #286: bind the dev-note input to its per-card store. `input` keeps
+      // cardNotes[e.id] live as the operator types; the value is re-seeded from
+      // the store on every render above, so navigation never loses a note.
+      const dnEl = $("tw-devnote");
+      if (dnEl) dnEl.addEventListener("input", () => { cardNotes[e.id] = dnEl.value; });
       // #311: bind the armed mark's confirm as a real listener rather than an
       // inline onclick attribute — same pattern as the PARA leaf rows. Inline
       // handlers are invisible to the jsdom smoke (runScripts: "outside-only"),
@@ -525,9 +752,14 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // test behind it.
       const escEl = $("tw-esc-mark");
       if (escEl) escEl.addEventListener("click", () => window.TW.confirmAgree());
-      document.querySelectorAll("button.tw-a").forEach((b) => { b.classList.remove("hl"); b.classList.remove("sel"); });
+      document.querySelectorAll("button.tw-a").forEach((b) => { b.classList.remove("hl"); b.classList.remove("sel"); b.classList.remove("prop"); });
       const sb = $("btn-" + e.suggestedAction);
       if (sb) sb.classList.add("hl");
+      // #343: highlight the propagated offer's action button on an undecided
+      // sibling, so the offered choice is one keypress away and visibly distinct
+      // from a Stage 2 suggestion (.prop, not .hl). keep's action ("keep") maps to
+      // the sk button; every other action code matches its button id.
+      if (offer) { const pb2 = $("btn-" + (offer.action === "keep" ? "sk" : offer.action)); if (pb2) pb2.classList.add("prop"); }
       // #311: while armed, the `ag` button stops offering the act and states what
       // is now expected — so the operator is never left pressing a key that
       // appears to have done nothing. Restored on every render where nothing is
@@ -1101,7 +1333,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
        * `keep` is. The two non-suggestion codes #338 split out are never produced
        * by a keypress — only by Stage 2, and only via `ag`. */
       if (code === "sk") { action = "keep"; }
-      return {
+      const row = {
         emailId: e.id,
         decisionKey: code,
         timestamp: new Date().toISOString(),
@@ -1109,6 +1341,16 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         user_typed_params: utp,
         paramsEdited: paramsEdited,
       };
+      // #343: if this card carried a propagated offer and the operator's action
+      // matches it, record where it came from so downstream never counts it as a
+      // Stage 2 agreement (the load-bearing marking). `propagated[cur]` still holds
+      // the pre-decision offer here — recomputePropagation() only clears it on the
+      // next render, once decisions[cur] is set.
+      const offer = propagated[cur];
+      if (offer && action === offer.action) {
+        row.propagatedFrom = { emailId: offer.fromId, decisionKey: offer.decisionKey };
+      }
+      return row;
     }
 
     /* --- Details panel (S40 lock) -------------------------------------------
@@ -1244,7 +1486,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (stopped) return;
         let pending = 0;
         for (let i = 0; i < emails.length; i++) {
-          const p = Math.floor(i / PAGE_SIZE);
+          const p = pageOf(i);
           if (decisions[i] && !submittedPages[p]) pending++;
         }
         $("tw-stopmsg").textContent = "Stop now? " + pending + " decided card" +
@@ -1260,10 +1502,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // next open (#214 Stop).
       confirmStop() {
         if (stopped) return;
+        dwellFlush(); // #404: count the open card's final dwell into the stop flush
         const out = [], ids = [];
         for (let i = 0; i < emails.length; i++) {
-          const p = Math.floor(i / PAGE_SIZE);
-          if (decisions[i] && !submittedPages[p]) { out.push(decisions[i]); ids.push(emails[i].id); }
+          const p = pageOf(i);
+          // #286/#404: the Stop flush emits rows too, so finalise them the same
+          // way submit() does — a note/duration must not be lost on the Stop path.
+          if (decisions[i] && !submittedPages[p]) { out.push(finalizeRow(decisions[i], emails[i].id)); ids.push(emails[i].id); }
         }
         if (out.length) { sendPrompt("batch:" + JSON.stringify(out)); persistSubmitted(ids); }
         stopped = true;
@@ -1338,9 +1583,14 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         // its own immutable decisions-<stamp>/batch-*.json, so a page finished
         // before the artifact dies is never lost.
         if (stopped || submittedPages[curPage]) return;
+        // #404: close the open interval so the card being submitted from counts
+        // its final dwell before the rows are finalised.
+        dwellFlush();
         const b = pageBounds(curPage);
         const out = [], ids = [];
-        for (let i = b.start; i < b.end; i++) { if (decisions[i]) { out.push(decisions[i]); ids.push(emails[i].id); } } // omit untouched
+        // #286/#404: finalise each row with its per-card note + accumulated
+        // time-on-card. Additive — the Stage 2 decision fields are untouched.
+        for (let i = b.start; i < b.end; i++) { if (decisions[i]) { out.push(finalizeRow(decisions[i], emails[i].id)); ids.push(emails[i].id); } } // omit untouched
         if (!out.length) return;
         sendPrompt("batch:" + JSON.stringify(out));
         submittedPages[curPage] = true;
@@ -1355,6 +1605,44 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     };
 
     /* --- Keyboard + field wiring --- */
+    // #20/#340 (S139): the custom fast tooltip. One tip element, shown on hover of
+    // any `[data-tip]` element via delegation, after a short (120 ms) delay so it
+    // feels quick but doesn't flicker on a passing cursor. Positioned under the
+    // element, inside tw-root. `white-space:pre-line` renders the combined
+    // suggestion tip's newlines. jsdom's getBoundingClientRect returns zeros — the
+    // tip still shows (text is what the smoke asserts), it just sits at 0,0.
+    root.style.position = root.style.position || "relative";
+    const _tipEl = document.createElement("div");
+    _tipEl.className = "tw-tip"; _tipEl.style.display = "none";
+    root.appendChild(_tipEl);
+    let _tipTimer = null;
+    function _showTip(el) {
+      const t = el.getAttribute("data-tip");
+      if (!t) return;
+      _tipEl.textContent = t;
+      _tipEl.style.display = "block";
+      const r = el.getBoundingClientRect();
+      const rr = root.getBoundingClientRect();
+      _tipEl.style.left = Math.max(0, r.left - rr.left) + "px";
+      _tipEl.style.top = (r.bottom - rr.top + 4) + "px";
+    }
+    function _hideTip() { _tipEl.style.display = "none"; }
+    root.addEventListener("mouseover", (ev) => {
+      const el = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
+      if (!el || el === _tipEl) return;
+      clearTimeout(_tipTimer);
+      _tipTimer = setTimeout(() => _showTip(el), 120);
+    });
+    root.addEventListener("mouseout", (ev) => {
+      const el = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
+      if (!el) return;
+      clearTimeout(_tipTimer);
+      _hideTip();
+    });
+    // Expose for the smoke: resolve the tip text an element would show.
+    window.TW_tipText = (el) => (el && el.getAttribute ? el.getAttribute("data-tip") : null);
+    // #286: the bottom dev-note writes to the current card's note store as you type.
+    $("tw-devnote").addEventListener("input", () => { if (devNoteId != null) cardNotes[devNoteId] = $("tw-devnote").value; });
     $("tw-wd-note").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmWaitDefer(); });
     $("tw-wd-date").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmWaitDefer(); });
     $("tw-de-tgt").addEventListener("keydown", (e) => { if (e.key === "Enter") window.TW.confirmDelegate(); });
