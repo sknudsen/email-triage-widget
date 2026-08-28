@@ -1628,6 +1628,10 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     }
     function _hideTip() { _tipEl.style.display = "none"; }
     root.addEventListener("mouseover", (ev) => {
+      // #340: the details button (.tw-iaff) is a child of .tw-sug[data-tip] and
+      // carries no tip of its own, so pointing at it would otherwise resolve to
+      // the suggestion tip via closest(). Bail when the pointer is inside it.
+      if (ev.target && ev.target.closest && ev.target.closest(".tw-iaff")) return;
       const el = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
       if (!el || el === _tipEl) return;
       clearTimeout(_tipTimer);

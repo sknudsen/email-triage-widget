@@ -144,8 +144,15 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
   };
 
   async function uploadSubmit(signal) {
+    // #376: park the recovery copy FIRST — unconditionally, before the runtime
+    // guard below can return early. A runtime-absent submit must still leave the
+    // operator a paste on the page; gating the park behind the callMcpTool check
+    // (the old ordering) meant a missing runtime showed the error banner and
+    // parked nothing — the exact loss #376 exists to prevent (S140).
+    parkRecoveryCopy(signal);
     if (!(window.cowork && typeof window.cowork.callMcpTool === "function")) {
-      status("window.cowork.callMcpTool is unavailable — open this inside Cowork.", "err");
+      status("window.cowork.callMcpTool is unavailable — open this inside Cowork. " +
+             "Your decisions are parked below — copy them out and hand them to the agent.", "err");
       return;
     }
     var rows = null;
@@ -154,8 +161,6 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     // Unique per-page index: never overwrite a prior page's submit. The
     // monotonic count keeps files ordered (the server / fallback stamp the ts).
     var seq = ("000" + (++submitCount)).slice(-3);
-    // Before ANY transport leg is attempted (#376).
-    parkRecoveryCopy(signal);
     status("Writing page (" + n + " decisions)…", "");
 
     // Preferred transport (#204): the local triage-transport MCP writes the
