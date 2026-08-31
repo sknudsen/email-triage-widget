@@ -13,7 +13,9 @@
     2. the aliased initTriage config JSON at the config marker.
   So nothing is fetched at runtime: the config does not ride OneDrive sync and
   is never agent-transcribed (the file is handed over by path). The only
-  transport leg left is the ~3 KB submit, shipped back via onedrive-upload.
+  transport leg left is the ~3 KB submit, emitted back via the S144 fallback
+  chain (Microsoft 365 connector -> OneDrive _scratch; #376 recovery-paste floor;
+  host: local MCP gated off until #430 routes it).
 
   build_artifact_doc replaces two markers, each appearing EXACTLY ONCE below
   (the IIFE-marker in the first script, the config-marker in the tw-config
@@ -83,16 +85,30 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 <script>
 (function () {
   "use strict";
-  // Working dir on the synced OneDrive mount. Per-page append-only (#214): each
-  // page submit writes its OWN file here (never overwrites), so a page finished
-  // before the artifact dies survives. The agent drains every artifact-submit-*
-  // file (de-alias against the one baked alias map -> decision_log per file).
-  var SUBMIT_DIR = "PARA-meta/email-triage-snapshots/_scratch";
+  // Canonical working dir on the synced OneDrive mount (the drain's glob root).
+  // Per-page append-only (#214): each page submit writes its OWN file here (never
+  // overwrites), so a page finished before the artifact dies survives. The agent
+  // drains every artifact-submit-* file (de-alias against the one baked alias map
+  // -> decision_log per file). Retained for reference: the S144 connector leg
+  // addresses this dir by driveId + parentItemId (baked in cfg), not by path.
+  var SUBMIT_DIR = "PARA-meta/email-triage-snapshots/_scratch"; // eslint-disable-line no-unused-vars
 
   // Stamp of the baked snapshot, set at boot from the config; namespaces the
   // per-page submit files so concurrent snapshots never collide.
   var stamp = null;
   var submitCount = 0;
+
+  // S144 (#427) — the emission fallback chain, all baked into cfg at assemble.
+  //   transportOrder: ordered leg names tried by uploadSubmit; the recovery-paste
+  //     floor is the terminal leg. Default keeps host: OFF (it 422s at publish and
+  //     is upstream-unrouted, #430); it becomes ["host","connector","recovery"]
+  //     only once #430 clears AND the manifest declares host:.
+  //   driveId / scratchItemId: the canonical OneDrive _scratch, for the connector
+  //     leg's sharepoint_upload_file (resolved fresh at assemble via
+  //     sharepoint_folder_search — the itemId is stable but assemble owns it).
+  var transportOrder = ["connector", "recovery"];
+  var driveId = null;
+  var scratchItemId = null;
 
   function status(msg, cls) {
     var s = document.getElementById("tw-status");
@@ -131,8 +147,23 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     });
   })();
 
-  // The widget calls a global sendPrompt(); create_artifact has none, so we
-  // shim it. batch: -> upload the submit; details: -> graceful note.
+  // The widget calls a global sendPrompt(); the published artifact has none, so
+  // we shim it. batch: -> emit via the fallback chain; details: -> graceful note.
+  //
+  // S142/S143: the published-artifact MCP api (claude.use("mcp") + callTool)
+  // rejects on failure with an error carrying a `code`. Absence codes (leg not
+  // wired / server unreachable / declaration missing) mean "try the next leg
+  // quietly"; any other code is a reached-but-failed leg, surfaced loudly — but
+  // the chain still falls through to the recovery floor so a live failure never
+  // costs the decisions.
+  function errCode(e) { return (e && (e.code || (e.error && e.error.code))) || ""; }
+  function isAbsence(e) {
+    var c = String(errCode(e)).toLowerCase();
+    return c === "not_in_manifest" || c === "server_not_connected" ||
+           c === "not_connected" || c === "unavailable" || c === "not_found";
+  }
+  function errText(e) { return errCode(e) || (e && e.message) || String(e); }
+
   window.sendPrompt = function (text) {
     try {
       if (typeof text === "string" && text.indexOf("batch:") === 0) { uploadSubmit(text); }
@@ -144,17 +175,11 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
   };
 
   async function uploadSubmit(signal) {
-    // #376: park the recovery copy FIRST — unconditionally, before the runtime
-    // guard below can return early. A runtime-absent submit must still leave the
-    // operator a paste on the page; gating the park behind the callMcpTool check
-    // (the old ordering) meant a missing runtime showed the error banner and
-    // parked nothing — the exact loss #376 exists to prevent (S140).
+    // #376 / S140: park the recovery copy FIRST — unconditionally, before ANY
+    // guard or transport leg can return early. A runtime-absent submit must still
+    // leave the operator a paste on the page; the park must not depend on the leg
+    // that just failed, and must already be on the page when a failure is read.
     parkRecoveryCopy(signal);
-    if (!(window.cowork && typeof window.cowork.callMcpTool === "function")) {
-      status("window.cowork.callMcpTool is unavailable — open this inside Cowork. " +
-             "Your decisions are parked below — copy them out and hand them to the agent.", "err");
-      return;
-    }
     var rows = null;
     try { rows = JSON.parse(signal.slice("batch:".length)); } catch (e) {}
     var n = Array.isArray(rows) ? rows.length : "?";
@@ -163,52 +188,99 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     var seq = ("000" + (++submitCount)).slice(-3);
     status("Writing page (" + n + " decisions)…", "");
 
-    // Preferred transport (#204): the local triage-transport MCP writes the
-    // submit straight to the local _scratch dir (canonical filename), so the
-    // drain reads a genuine local file — no OneDrive round-trip, no hydration,
-    // and the raw `batch:[...]` payload avoids the onedrive-upload
-    // double-encoding. Falls back to onedrive-upload if the transport tool is
-    // not configured, so OneDrive stays the safety net until it's proven live.
-    //
-    // Distinguish the two failure shapes so a BROKEN transport is never read as
-    // "tool absent" (else the proving run silently sits on the fallback):
-    //   - throw          => tool not configured/reachable  -> quiet fallback
-    //   - returns isError => tool reached but FAILED        -> loud, flagged fallback
-    var transportFailed = null; // non-null = reached-but-errored; surfaced below
+    // The canonical filename EVERY file-writing leg lands, so the drain globs them
+    // identically (`artifact-submit-*`). The host: put_submit leg passes
+    // {stamp,seq,payload} and the server rebuilds this same name server-side.
+    var fname = "artifact-submit-" + (stamp || "nostamp") + "-p" + seq + "-" + Date.now() + ".json";
+
+    // S144 (#427): the published-artifact MCP namespace -- the PROVEN page-side
+    // api (claude.use("mcp") + callTool), NOT window.cowork. null => not served/
+    // granted/loaded; every MCP leg then no-ops through to the recovery floor.
+    var mcp = null;
     try {
-      var t = await window.cowork.callMcpTool("mcp__triage-transport__put_submit",
-        { stamp: stamp || "nostamp", seq: seq, payload: signal });
-      if (t && !t.isError) {
-        status("Page submitted ✓ (local transport) — " + n + " decisions. " +
-               submitCount + " page(s) this sitting. Keep going or close when done; " +
-               "the agent drains + logs each page (present.drain → decision_log).", "ok");
+      if (window.claude && typeof window.claude.use === "function") {
+        mcp = await window.claude.use("mcp");
+      }
+    } catch (e) { console.info("[shell] claude.use(mcp) threw -- MCP legs will skip:", e); }
+
+    // Ordered fallback chain (#427). Legs are tried in transportOrder; each MCP
+    // leg falls through on failure; the recovery-paste floor (already parked at
+    // the top) is the terminal leg. Success on any leg short-circuits the rest.
+    var order = (Array.isArray(transportOrder) && transportOrder.length)
+      ? transportOrder : ["connector", "recovery"];
+    var loud = []; // reached-but-errored legs, surfaced if we end on the floor
+
+    for (var i = 0; i < order.length; i++) {
+      var leg = order[i];
+
+      if (leg === "recovery") {
+        // Terminal floor: the raw signal is already parked at the top of the fn.
+        // Reaching here means no MCP leg landed -- this page did not auto-transport.
+        submitCount--;
+        if (loud.length) {
+          status("⚠ transport ERRORED (" + loud.join("; ") + ") -- your " + n +
+                 " decisions are parked below. Copy them out and hand them to the agent.", "err");
+        } else {
+          status("No automated transport is wired -- your " + n + " decisions are " +
+                 "parked below. Copy them out and hand them to the agent.", "err");
+        }
         return;
       }
-      transportFailed = (t && t.content && t.content[0] && t.content[0].text) || "transport returned isError";
-      console.warn("[shell] triage-transport put_submit ERRORED — falling back to OneDrive:", transportFailed, t);
-    } catch (e) {
-      console.info("[shell] triage-transport unavailable — using OneDrive fallback:", e);
+
+      if (!mcp) { continue; } // both MCP legs need the resolved namespace
+
+      if (leg === "host") {
+        // Leg 1 -- host: local MCP. PREFERRED once #430 routes host:<local-server>;
+        // gated OFF today (absent from the default order AND the manifest, so a
+        // stray attempt rejects not_in_manifest -> quiet skip). The server stamps
+        // the canonical filename from {stamp,seq,payload}.
+        try {
+          await mcp.callTool("host:triage-transport", "put_submit",
+            { stamp: stamp || "nostamp", seq: seq, payload: signal });
+          status("Page submitted ✓ (local transport) -- " + n + " decisions. " +
+                 submitCount + " page(s) this sitting. The agent drains + logs each page.", "ok");
+          return;
+        } catch (e) {
+          if (isAbsence(e)) { console.info("[shell] host: leg absent -- next:", e); }
+          else { loud.push("host: " + errText(e)); console.warn("[shell] host: leg ERRORED -- next:", e); }
+        }
+        continue;
+      }
+
+      if (leg === "connector") {
+        // Leg 2 -- Microsoft 365 connector (S143 proven primary). The publishable
+        // class the host: publish-gate does not touch; sharepoint_upload_file writes
+        // the canonical file straight into the OneDrive _scratch the drain already
+        // globs. The page builds the filename; driveId + scratch itemId baked in cfg.
+        try {
+          await mcp.callTool("Microsoft 365", "sharepoint_upload_file", {
+            driveId: driveId,
+            parentItemId: scratchItemId,
+            filename: fname,
+            content: signal,
+            conflictBehavior: "fail"
+          });
+          status("Page submitted ✓ (connector) -- " + n + " decisions written to _scratch/" +
+                 fname + ". " + submitCount + " page(s) this sitting. The agent drains + logs each page.", "ok");
+          return;
+        } catch (e) {
+          if (isAbsence(e)) { console.info("[shell] connector leg absent -- next:", e); }
+          else { loud.push("connector: " + errText(e)); console.warn("[shell] connector leg ERRORED -- next:", e); }
+        }
+        continue;
+      }
+
+      console.warn("[shell] unknown transport leg in cfg.transportOrder:", leg);
     }
 
-    // Fallback: legacy OneDrive upload. Same canonical filename so the drain
-    // globs it identically; client Date.now() is the ts.
-    var fname = "artifact-submit-" + (stamp || "nostamp") + "-p" + seq + "-" + Date.now() + ".json";
-    var path = SUBMIT_DIR + "/" + fname;
-    try {
-      var up = await window.cowork.callMcpTool("mcp__outlook-mcp__onedrive-upload",
-        { path: path, content: signal, conflictBehavior: "fail" });
-      if (up && up.isError) { submitCount--; status("Upload returned an error — see console.", "err"); console.log(up); return; }
-      if (transportFailed) {
-        // Decisions ARE saved (via OneDrive), but the transport we're proving
-        // failed — flag it loudly (err style) so it isn't mistaken for success.
-        status("⚠ transport ERRORED (" + transportFailed + ") — saved " + n +
-               " decisions via OneDrive fallback to _scratch/" + fname + ". Check the MCP config; see console.", "err");
-      } else {
-        status("Page submitted ✓ (OneDrive fallback) — " + n + " decisions written to _scratch/" + fname + ". " +
-               submitCount + " page(s) submitted this sitting. Keep going or close when done; " +
-               "the agent drains + logs each page (present.drain → decision_log).", "ok");
-      }
-    } catch (e) { submitCount--; status("Upload failed: " + e, "err"); }
+    // Order exhausted with no "recovery" terminal (defensive: cfg omitted it).
+    // Decisions are still parked at the top -- surface loudly, never silently.
+    submitCount--;
+    if (loud.length) {
+      status("⚠ all transport legs failed (" + loud.join("; ") + ") -- decisions parked below; paste to the agent.", "err");
+    } else {
+      status("No transport leg landed -- decisions parked below; paste to the agent.", "err");
+    }
   }
 
   function boot() {
@@ -221,6 +293,13 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
       cfg = JSON.parse(document.getElementById("tw-config").textContent);
     } catch (e) { status("Baked config did not parse: " + e, "err"); return; }
     stamp = cfg.stamp || null;
+    // S144 (#427): the emission fallback chain's baked config. Absent => the
+    // safe default (connector primary, recovery floor; host: OFF).
+    if (Array.isArray(cfg.transportOrder) && cfg.transportOrder.length) {
+      transportOrder = cfg.transportOrder;
+    }
+    driveId = cfg.driveId || null;
+    scratchItemId = cfg.scratchItemId || null;
     var n = (cfg.emails || []).length;
     status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
            " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit page " +
