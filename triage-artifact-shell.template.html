@@ -100,13 +100,16 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 
   // S144 (#427) — the emission fallback chain, all baked into cfg at assemble.
   //   transportOrder: ordered leg names tried by uploadSubmit; the recovery-paste
-  //     floor is the terminal leg. Default keeps host: OFF (it 422s at publish and
-  //     is upstream-unrouted, #430); it becomes ["host","connector","recovery"]
-  //     only once #430 clears AND the manifest declares host:.
-  //   driveId / scratchItemId: the canonical OneDrive _scratch, for the connector
-  //     leg's sharepoint_upload_file (resolved fresh at assemble via
-  //     sharepoint_folder_search — the itemId is stable but assemble owns it).
-  var transportOrder = ["connector", "recovery"];
+  //     floor is the terminal leg. Default (S147, #435) is ["db","recovery"] — the
+  //     artifact `db` capability is the proven return channel today; the connector
+  //     (_scratch) leg is retired from the routine chain (it is the OneDrive path
+  //     #435 escapes) but its code stays for opt-in. host: stays OFF (422s at
+  //     publish, upstream-unrouted #430) until #430 clears AND the manifest
+  //     declares it.
+  //   driveId / scratchItemId: the canonical OneDrive _scratch, for the (now
+  //     opt-in) connector leg's sharepoint_upload_file (resolved fresh at assemble
+  //     via sharepoint_folder_search — the itemId is stable but assemble owns it).
+  var transportOrder = ["db", "recovery"];
   var driveId = null;
   var scratchItemId = null;
 
@@ -188,10 +191,18 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     var seq = ("000" + (++submitCount)).slice(-3);
     status("Writing page (" + n + " decisions)…", "");
 
+    // One monotonic timestamp per submit, shared by the connector filename and the
+    // db doc id so both identify this page identically.
+    var submitTs = Date.now();
     // The canonical filename EVERY file-writing leg lands, so the drain globs them
     // identically (`artifact-submit-*`). The host: put_submit leg passes
     // {stamp,seq,payload} and the server rebuilds this same name server-side.
-    var fname = "artifact-submit-" + (stamp || "nostamp") + "-p" + seq + "-" + Date.now() + ".json";
+    var fname = "artifact-submit-" + (stamp || "nostamp") + "-p" + seq + "-" + submitTs + ".json";
+    // #435 db leg doc id: mirrors the _scratch filename tail (-pNNN-<ts>) — unique
+    // per submit (append-only, never overwrites a prior page) and carrying the
+    // -p- key. The key and ts are ALSO stored as doc fields so the headless drain
+    // orders explicitly (read_db list order is NOT write order).
+    var dbDocId = "p" + seq + "-" + submitTs;
 
     // S144 (#427): the published-artifact MCP namespace -- the PROVEN page-side
     // api (claude.use("mcp") + callTool), NOT window.cowork. null => not served/
@@ -202,6 +213,17 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
         mcp = await window.claude.use("mcp");
       }
     } catch (e) { console.info("[shell] claude.use(mcp) threw -- MCP legs will skip:", e); }
+
+    // #435 -- the artifact `db` capability namespace (separate from mcp). null =>
+    // this view cannot run db (not served/granted, or the page is open in a
+    // browser not signed in as the operator): the db leg then skips and the chain
+    // falls to the recovery floor, so the parked decisions are never lost.
+    var db = null;
+    try {
+      if (window.claude && typeof window.claude.use === "function") {
+        db = await window.claude.use("db");
+      }
+    } catch (e) { console.info("[shell] claude.use(db) threw -- db leg will skip:", e); }
 
     // Ordered fallback chain (#427). Legs are tried in transportOrder; each MCP
     // leg falls through on failure; the recovery-paste floor (already parked at
@@ -227,7 +249,34 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
         return;
       }
 
-      if (!mcp) { continue; } // both MCP legs need the resolved namespace
+      if (leg === "db") {
+        // #435 -- artifact `db` leg. The PROVEN return channel today: the page
+        // writes one doc per page to its own store; the headless session drains
+        // it with read_db. No _scratch file, no OneDrive placeholder hydration.
+        // Doc data = the raw batch: signal plus the -p- key and ts as explicit
+        // order fields. A null db namespace or a failed write falls through to
+        // the floor -- the decisions are already parked at the top of the fn.
+        if (!db) { continue; }
+        try {
+          await db.doc("submissions/" + dbDocId).set({
+            batch: signal,
+            p: seq,
+            ts: submitTs,
+            stamp: stamp || "nostamp",
+            n: (Array.isArray(rows) ? rows.length : null)
+          });
+          status("Page submitted ✓ (db) -- " + n + " decisions written to the " +
+                 "artifact store. " + submitCount + " page(s) this sitting. The " +
+                 "agent drains + logs each page.", "ok");
+          return;
+        } catch (e) {
+          loud.push("db: " + errText(e));
+          console.warn("[shell] db leg ERRORED -- next:", e);
+        }
+        continue;
+      }
+
+      if (!mcp) { continue; } // the host/connector legs need the resolved namespace
 
       if (leg === "host") {
         // Leg 1 -- host: local MCP. PREFERRED once #430 routes host:<local-server>;
