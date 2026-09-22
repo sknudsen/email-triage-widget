@@ -131,6 +131,19 @@
       if (!STORE_KEY || !ids.length) return;
       try { const m = loadSubmitted(); ids.forEach((id) => { m[id] = true; }); window.localStorage.setItem(STORE_KEY, JSON.stringify(Object.keys(m))); } catch (e) {}
     }
+    /* --- #464 sitting-marker signal. The published artifact shell installs
+       window.TW_SIGNAL and writes the `sitting/current` db doc the scheduled
+       `pre` tail reads before it republishes the durable card (#458). Hosts
+       without the shell (show_widget, the jsdom smokes) leave it undefined and
+       every call here is a no-op — the widget must never depend on, or be
+       broken by, the marker. Deliberately try/caught: a marker write is an
+       interlock, never a reason to interrupt a sitting. */
+    function twSignal(kind, info) {
+      try {
+        if (typeof window.TW_SIGNAL === "function") window.TW_SIGNAL(kind, info || {});
+      } catch (e) { /* the sitting outranks its marker */ }
+    }
+
     const priorSubmitted = loadSubmitted();
     const emails = (cfg.emails || []).filter((e) => !priorSubmitted[e.id]);
 
@@ -191,6 +204,18 @@
     const submittedPages = {}; // page index -> true once its batch is submitted
     function pageBounds(p) {
       return pages[p] || { start: 0, end: 0 };
+    }
+    /* #464: how many pages have been submitted, and whether every page has.
+       Both read `submittedPages`, the same map submit() locks a page in, so the
+       marker can never disagree with what the widget considers submitted. */
+    function submittedPageCount() {
+      let n = 0;
+      for (let p = 0; p < pageCount; p++) if (submittedPages[p]) n++;
+      return n;
+    }
+    function allPagesSubmitted() {
+      for (let p = 0; p < pageCount; p++) if (!submittedPages[p]) return false;
+      return pageCount > 0;
     }
     function pageDecidedCount(p) {
       const b = pageBounds(p);
@@ -1307,6 +1332,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
      * path in the pipeline, so the error would not be small.
      */
     function buildDecision(code, params, edited) {
+      /* #464: the sitting opens on the FIRST DECISION, not on first render.
+         Opening the card to look at it loses nothing to a republish, so a
+         glance must not take the lock; a decided-but-unsubmitted card is
+         exactly what a republish destroys. Every action path (decide,
+         confirmAgree, the panels) writes decisions[] through this one
+         function, so this is the only place the event can be raised once. */
+      twSignal("decide");
       const e = emails[cur];
       const sug = e.suggestion || null;
       let action = code;
@@ -1512,6 +1544,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         }
         if (out.length) { sendPrompt("batch:" + JSON.stringify(out)); persistSubmitted(ids); }
         stopped = true;
+        twSignal("sitting_done", { by: "stop" }); // #464: Stop ends the sitting for good
+
         renderStopped(out.length);
       },
 
@@ -1595,6 +1629,11 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         sendPrompt("batch:" + JSON.stringify(out));
         submittedPages[curPage] = true;
         persistSubmitted(ids); // remember for resume — skip on next open (no 404)
+        /* #464: a page submit is operator activity (it refreshes the lock), and
+           the LAST page closes the sitting — there is nothing left on the card
+           that a republish could destroy. */
+        twSignal("page_submitted", { pagesSubmitted: submittedPageCount() });
+        if (allPagesSubmitted()) twSignal("sitting_done", { by: "last_page" });
         // Stay on the page's celebration card — a deliberate pause between pages.
         // The operator steps to the next page with Page ▶ (goPage), which clears
         // showCompletion. No auto-advance, no separate banner (the card carries

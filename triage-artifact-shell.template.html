@@ -113,6 +113,139 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
   var driveId = null;
   var scratchItemId = null;
 
+  // ---- #464 sitting marker ---------------------------------------------------
+  // A mutable, TTL-bearing flag at `sitting/current` in THIS card's db, written
+  // by the page and read by the scheduled `pre` tail before it republishes the
+  // durable card (#458). Why the page and not the session: only the page knows a
+  // sitting is live, so a file-backed marker the session wrote could never say
+  // what the operator is actually doing. Why it matters: a republish that lands
+  // mid-sitting overwrites the surface being adjudicated on, and an un-reloaded
+  // tab then writes its submits under the OLD stamp — stranded decisions, which
+  // for a per-op-human-ack system (#308) is an integrity failure, not cosmetics.
+  //
+  // The widget raises three events through window.TW_SIGNAL: `decide` (the
+  // sitting opens on the first DECISION, never on render — a glance loses
+  // nothing to a republish), `page_submitted` (activity; the lock stays fresh),
+  // and `sitting_done` (last page submitted, or Stop confirmed).
+  var SITTING_DOC = "sitting/current";
+  var SITTING_SCHEMA = 1;
+  // Activity bumps are coalesced. A db write belongs on a real state change,
+  // never on a timer rewriting a clock value — and one bump a minute is plenty
+  // for a TTL measured in hours.
+  var SITTING_BEAT_MS = 60000;
+  var sitting = {
+    opened: false, closed: false, openedAt: null, lastActivityAt: null,
+    pages: 0, lastWriteAt: 0, chain: Promise.resolve()
+  };
+
+  // One memoized db namespace for the whole page: the submit leg and the marker
+  // are separate writers to the same store, and resolving twice would be two
+  // grants for one capability. null => this view cannot run db (not served/
+  // granted, or opened by someone who is not the signed-in operator).
+  var dbPromise = null;
+  function resolveDb() {
+    if (!dbPromise) {
+      dbPromise = (async function () {
+        try {
+          if (window.claude && typeof window.claude.use === "function") {
+            return await window.claude.use("db");
+          }
+        } catch (e) { console.info("[shell] claude.use(db) threw -- db legs will skip:", e); }
+        return null;
+      })();
+    }
+    return dbPromise;
+  }
+
+  // Every write sends the WHOLE body (db `set` replaces), built inside the chain
+  // so it reflects the mirror at write time. Writes are serialised through
+  // `sitting.chain` — one write at a time per document — and a failure is logged,
+  // never surfaced: the marker is an interlock, and the sitting outranks it.
+  function writeSitting(state, closedBy) {
+    sitting.lastWriteAt = Date.now();
+    sitting.chain = sitting.chain.then(function () {
+      return resolveDb().then(function (db) {
+        if (!db) { return null; }
+        return db.doc(SITTING_DOC).set({
+          v: SITTING_SCHEMA,
+          stamp: stamp || "nostamp",
+          state: state,
+          openedAt: sitting.openedAt,
+          lastActivityAt: sitting.lastActivityAt,
+          pagesSubmitted: sitting.pages,
+          closedBy: closedBy || null
+        });
+      });
+    }).catch(function (e) {
+      console.warn("[shell] sitting marker write failed (" + state + "):", e);
+      return null;
+    });
+    return sitting.chain;
+  }
+
+  // Opening reads the existing doc first, so a RELOAD mid-sitting keeps the
+  // original openedAt (and page count) instead of restarting the sitting's
+  // clock. The TTL rides lastActivityAt, so this is provenance, not the lock.
+  function openSitting() {
+    var now = Date.now();
+    sitting.opened = true;
+    sitting.openedAt = now;
+    sitting.lastActivityAt = now;
+    sitting.chain = sitting.chain.then(function () {
+      return resolveDb().then(function (db) {
+        if (!db) { return null; }
+        return db.doc(SITTING_DOC).get().then(function (snap) {
+          var prior = (snap && snap.exists && typeof snap.data === "function") ? snap.data() : null;
+          if (prior && prior.stamp === (stamp || "nostamp") && prior.state === "open") {
+            if (prior.openedAt) { sitting.openedAt = prior.openedAt; }
+            if (typeof prior.pagesSubmitted === "number" && prior.pagesSubmitted > sitting.pages) {
+              sitting.pages = prior.pagesSubmitted;
+            }
+          }
+          return null;
+        });
+      });
+    }).catch(function (e) {
+      console.info("[shell] sitting marker read skipped:", e);
+      return null;
+    });
+    return writeSitting("open", null);
+  }
+
+  // The widget's only outward call besides sendPrompt. Unknown kinds are logged,
+  // not thrown: a shell older than its widget must degrade, never break a sitting.
+  window.TW_SIGNAL = function (kind, info) {
+    try {
+      info = info || {};
+      if (kind === "decide") {
+        if (sitting.closed) { return; }        // a stopped sitting never reopens
+        if (!sitting.opened) { openSitting(); return; }
+        sitting.lastActivityAt = Date.now();
+        if (sitting.lastActivityAt - sitting.lastWriteAt >= SITTING_BEAT_MS) {
+          writeSitting("open", null);
+        }
+        return;
+      }
+      if (kind === "page_submitted") {
+        if (sitting.closed) { return; }
+        if (typeof info.pagesSubmitted === "number") { sitting.pages = info.pagesSubmitted; }
+        sitting.opened = true;
+        sitting.lastActivityAt = Date.now();
+        if (!sitting.openedAt) { sitting.openedAt = sitting.lastActivityAt; }
+        writeSitting("open", null);
+        return;
+      }
+      if (kind === "sitting_done") {
+        sitting.closed = true;
+        sitting.lastActivityAt = Date.now();
+        if (!sitting.openedAt) { sitting.openedAt = sitting.lastActivityAt; }
+        writeSitting("closed", info.by || null);
+        return;
+      }
+      console.warn("[shell] unknown TW_SIGNAL kind:", kind);
+    } catch (e) { console.warn("[shell] TW_SIGNAL failed:", e); }
+  };
+
   function status(msg, cls) {
     var s = document.getElementById("tw-status");
     s.textContent = msg;
@@ -218,12 +351,9 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     // this view cannot run db (not served/granted, or the page is open in a
     // browser not signed in as the operator): the db leg then skips and the chain
     // falls to the recovery floor, so the parked decisions are never lost.
-    var db = null;
-    try {
-      if (window.claude && typeof window.claude.use === "function") {
-        db = await window.claude.use("db");
-      }
-    } catch (e) { console.info("[shell] claude.use(db) threw -- db leg will skip:", e); }
+    // Shared with the #464 sitting marker through resolveDb() -- one namespace
+    // per page, two writers.
+    var db = await resolveDb();
 
     // Ordered fallback chain (#427). Legs are tried in transportOrder; each MCP
     // leg falls through on failure; the recovery-paste floor (already parked at
