@@ -24,6 +24,12 @@
   asserts a single occurrence, so a stray copy would mis-bake or fail the build.
   assemble / alias / decision_log all stay in Python (agent land). The only JS
   here is the sendPrompt shim plus the initTriage bootstrap.
+
+  #482 (S166): with `assemble --artifact-doc … --batch-db` the baked config is
+  only the page settings plus batchSource "db", and the bootstrap reads the
+  batch from this card's db (batch/manifest + batch/chunk-N, written by
+  present.batch_docs) and verifies it before rendering. Without the flag the
+  config is baked as before.
 -->
 <style>
 :root{
@@ -462,6 +468,111 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     }
   }
 
+  // ---- #482 batch from db ---------------------------------------------------
+  // With cfg.batchSource === "db" the page carries only its transport settings;
+  // the batch lives in this card's db as batch/manifest + batch/chunk-N, written
+  // by the rung (present.batch_docs) in one atomic ArtifactData batch. The page
+  // verifies before it renders anything: every chunk present, its stamp equal to
+  // the manifest's, its emailsJson hashing to the manifest's sha256, and the
+  // counts adding up. Any failure refuses the batch, says why, and renders no
+  // cards (so there is nothing to Submit). The operator chose loud over partial
+  // (S166): with atomic writes a failure here means a bug or a racing write.
+  var BATCH_SCHEMA = 1;
+  var BATCH_MANIFEST = "batch/manifest";
+
+  function batchRefusal(reason, detail) {
+    var e = new Error(reason + ": " + detail);
+    e.batchReason = reason;
+    e.batchDetail = detail;
+    return e;
+  }
+
+  function snapData(snap) {
+    if (!snap || snap.exists === false) { return null; }
+    if (typeof snap.data === "function") { return snap.data() || null; }
+    return null;
+  }
+
+  // sha256 over the UTF-8 bytes of the string exactly as the db returned it.
+  // null when WebCrypto isn't available in this view; the page then checks
+  // stamps and counts only, and says so in the status line.
+  async function sha256Hex(text) {
+    var subtle = (typeof crypto !== "undefined" && crypto && crypto.subtle) ? crypto.subtle : null;
+    if (!subtle || typeof TextEncoder === "undefined") { return null; }
+    var buf = await subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.prototype.map.call(new Uint8Array(buf), function (b) {
+      return ("0" + b.toString(16)).slice(-2);
+    }).join("");
+  }
+
+  async function readDoc(db, path) {
+    try { return snapData(await db.doc(path).get()); }
+    catch (e) { throw batchRefusal("read_failed", path + ": " + errText(e)); }
+  }
+
+  async function loadBatchFromDb(pageCfg) {
+    var db = await resolveDb();
+    if (!db) {
+      throw batchRefusal("no_db", "this view can't read the card's db (not granted, " +
+                         "or not signed in as the operator)");
+    }
+    var m = await readDoc(db, BATCH_MANIFEST);
+    if (!m) { throw batchRefusal("empty", "no batch in the card's db (" + BATCH_MANIFEST + " is absent)"); }
+    if (m.v !== BATCH_SCHEMA) {
+      throw batchRefusal("schema", "manifest v=" + m.v + ", this page reads v=" + BATCH_SCHEMA);
+    }
+    if (!m.stamp || !Array.isArray(m.chunks) || !m.config || typeof m.emailCount !== "number") {
+      throw batchRefusal("malformed", "manifest lacks stamp, chunks, config or emailCount");
+    }
+    var emails = [];
+    var unchecked = false;
+    for (var i = 0; i < m.chunks.length; i++) {
+      var ref = m.chunks[i] || {};
+      var path = "batch/" + ref.id;
+      var c = await readDoc(db, path);
+      if (!c) { throw batchRefusal("missing_chunk", path + " is absent"); }
+      if (c.stamp !== m.stamp) {
+        throw batchRefusal("stamp_skew", ref.id + " is stamp " + c.stamp + ", the manifest is " + m.stamp);
+      }
+      if (typeof c.emailsJson !== "string") { throw batchRefusal("malformed", ref.id + " has no emailsJson"); }
+      var h = await sha256Hex(c.emailsJson);
+      if (h === null) { unchecked = true; }
+      else if (h !== ref.sha256) { throw batchRefusal("sha_mismatch", ref.id + " does not match the manifest's sha256"); }
+      var list;
+      try { list = JSON.parse(c.emailsJson); }
+      catch (e) { throw batchRefusal("malformed", ref.id + " emailsJson does not parse"); }
+      if (!Array.isArray(list) || list.length !== ref.n) {
+        throw batchRefusal("count_mismatch", ref.id + " holds " +
+                           (Array.isArray(list) ? list.length : "?") + ", the manifest says " + ref.n);
+      }
+      emails = emails.concat(list);
+    }
+    if (emails.length !== m.emailCount) {
+      throw batchRefusal("count_mismatch", "chunks hold " + emails.length +
+                         ", the manifest says " + m.emailCount);
+    }
+    // Manifest config first, then the baked page settings (transport), then the
+    // verified emails. The stamp is the manifest's: submissions carry it.
+    var cfg = Object.assign({}, m.config, pageCfg, { emails: emails, stamp: m.stamp });
+    return { cfg: cfg, unchecked: unchecked };
+  }
+
+  var REFUSAL_HINT = {
+    empty: "No rung has written a batch to this card yet.",
+    stamp_skew: "Reload once: a rung may have been writing. If it persists, tell the agent.",
+    missing_chunk: "Reload once: a rung may have been writing. If it persists, tell the agent.",
+    read_failed: "Reload once. If it persists, tell the agent.",
+    no_db: "Open the card signed in as the operator."
+  };
+
+  function refuseBatch(e) {
+    var reason = (e && e.batchReason) || "error";
+    var detail = (e && e.batchDetail) || errText(e);
+    window.TW_BATCH = { state: "refused", reason: reason, detail: detail };
+    status("Not showing this batch. " + reason + ": " + detail + ". " +
+           (REFUSAL_HINT[reason] || "The batch in the db is bad; tell the agent."), "err");
+  }
+
   function boot() {
     if (typeof window.initTriage !== "function") {
       status("Widget IIFE did not load (window.initTriage missing).", "err");
@@ -471,6 +582,19 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     try {
       cfg = JSON.parse(document.getElementById("tw-config").textContent);
     } catch (e) { status("Baked config did not parse: " + e, "err"); return; }
+    if (cfg.batchSource === "db") {
+      window.TW_BATCH = { state: "loading" };
+      status("Loading the batch from the card's db…", "");
+      return loadBatchFromDb(cfg).then(function (r) {
+        window.TW_BATCH = { state: "ok", stamp: r.cfg.stamp, emails: r.cfg.emails.length,
+                            unchecked: r.unchecked };
+        start(r.cfg, r.unchecked ? " (sha256 unchecked: no WebCrypto in this view)" : "");
+      }, refuseBatch);
+    }
+    start(cfg, "");
+  }
+
+  function start(cfg, note) {
     stamp = cfg.stamp || null;
     // S144 (#427): the emission fallback chain's baked config. Absent => the
     // safe default (connector primary, recovery floor; host: OFF).
@@ -481,7 +605,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     scratchItemId = cfg.scratchItemId || null;
     var n = (cfg.emails || []).length;
     status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
-           " (stamp " + (cfg.stamp || "?") + "). Decide each card, then Submit page " +
+           " (stamp " + (cfg.stamp || "?") + ")" + (note || "") + ". Decide each card, then Submit page " +
            "— each page is saved on its own, so you can stop any time.", "");
     window.initTriage(cfg);
   }
