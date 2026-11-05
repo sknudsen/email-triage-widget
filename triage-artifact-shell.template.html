@@ -292,7 +292,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
   // The widget calls a global sendPrompt(); the published artifact has none, so
   // we shim it. batch: -> emit via the fallback chain; details: -> graceful note.
   //
-  // S142/S143: the published-artifact MCP api (claude.use("mcp") + callTool)
+  // S142/S143: the published-artifact MCP api (the mcp namespace's tool call)
   // rejects on failure with an error carrying a `code`. Absence codes (leg not
   // wired / server unreachable / declaration missing) mean "try the next leg
   // quietly"; any other code is a reached-but-failed leg, surfaced loudly — but
@@ -343,15 +343,19 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     // orders explicitly (read_db list order is NOT write order).
     var dbDocId = "p" + seq + "-" + submitTs;
 
+    /* __MCP_RESOLVE_BEGIN__ */
     // S144 (#427): the published-artifact MCP namespace -- the PROVEN page-side
-    // api (claude.use("mcp") + callTool), NOT window.cowork. null => not served/
-    // granted/loaded; every MCP leg then no-ops through to the recovery floor.
+    // api, NOT window.cowork. null => not served/granted/loaded; every MCP leg
+    // then no-ops through to the recovery floor. #502: present.assemble drops
+    // this block and the two MCP legs below when transportOrder names neither
+    // "host" nor "connector", so the page names only what it declares.
     var mcp = null;
     try {
       if (window.claude && typeof window.claude.use === "function") {
         mcp = await window.claude.use("mcp");
       }
     } catch (e) { console.info("[shell] claude.use(mcp) threw -- MCP legs will skip:", e); }
+    /* __MCP_RESOLVE_END__ */
 
     // #435 -- the artifact `db` capability namespace (separate from mcp). null =>
     // this view cannot run db (not served/granted, or the page is open in a
@@ -412,6 +416,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
         continue;
       }
 
+      /* __MCP_LEGS_BEGIN__ */
       if (!mcp) { continue; } // the host/connector legs need the resolved namespace
 
       if (leg === "host") {
@@ -454,6 +459,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
         }
         continue;
       }
+      /* __MCP_LEGS_END__ */
 
       console.warn("[shell] unknown transport leg in cfg.transportOrder:", leg);
     }
