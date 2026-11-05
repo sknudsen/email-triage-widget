@@ -1578,5 +1578,22 @@ window.initTriage({ batch: 1, total: 1, emails: [noSugCard], tree });
 ok("#20 no-suggestion + no glossary -> suggestion area has no tip (graceful)",
   !document.querySelector(".tw-sug").getAttribute("data-tip"));
 
+console.log("== #20 S172 action-button + control tooltips ==");
+{
+  const fs = require("fs"), path = require("path");
+  const GLF = JSON.parse(fs.readFileSync(path.join(__dirname, "../../skills/email-triage-present/present/glossary.json"), "utf8"));
+  window.initTriage({ batch: 1, total: 1, emails: [plain], tree, glossary: GLF });
+  const codes = ["ag", "cu", "st", "do", "de", "wa", "su", "df", "un", "pa", "ar", "sk"];
+  const missing = codes.filter((k) => document.getElementById("btn-" + k).getAttribute("data-tip") !== GLF["act." + k]);
+  ok("#20 every one of the 12 action buttons carries its glossary tip", missing.length === 0, missing.join(","));
+  ok("#20 do and su tips name each other (the pair easiest to confuse)",
+    /Sunsama/.test(GLF["act.do"]) && /Do/.test(GLF["act.su"]));
+  const ctl = ["tw-prev", "tw-next", "tw-ppage", "tw-npage", "tw-sub"].filter((id) => !document.getElementById(id).getAttribute("data-tip"));
+  ok("#20 nav, page and submit controls carry tips", ctl.length === 0, ctl.join(","));
+  window.initTriage({ batch: 1, total: 1, emails: [plain], tree });
+  ok("#20 no glossary -> action buttons carry no tip, no error",
+    codes.every((k) => !document.getElementById("btn-" + k).hasAttribute("data-tip")));
+}
+
 console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
 process.exit(fail ? 1 : 0);
