@@ -1,0 +1,121 @@
+{
+  "_about": "#436 mirror contract (S176). Shared by public/test/gate-page.smoke.js and skills/email-triage-present/test_gate_contract.py: the widget's decline codes, the gate/config doc the page reads, the operator acts, the submit the page writes, and the approvals gate_drain records from it. Change one side and the other side's test fails. S176: the gate collects no new information, so every channel is null.",
+  "declineReasons": [
+    "plan-diverged",
+    "my-decision-wrong",
+    "changed-mind",
+    "misclick"
+  ],
+  "configDoc": {
+    "v": 1,
+    "stamp": "2026-11-10_11-39-18+01-00",
+    "opCount": 3,
+    "builtAt": "2026-11-10T12:00:00+00:00",
+    "payload": {
+      "stamp": "2026-11-10_11-39-18+01-00",
+      "counts": {
+        "tier1": 5,
+        "tier2": 1,
+        "tier3": 2
+      },
+      "tier1Count": 5,
+      "tier2": [
+        {
+          "gateKey": "decisions-p001-1794300000000|0|E1|df",
+          "subject": "Faktura marts",
+          "action": "df",
+          "sender": "faktura@e-boks.dk",
+          "senderAddress": null,
+          "sourcePath": "Inbox",
+          "destPath": "Inbox/Defer/Defer_eboks",
+          "flags": []
+        }
+      ],
+      "tier3": [
+        {
+          "gateKey": "decisions-p001-1794300000000|1|E2|pa",
+          "subject": "Læseklub i november",
+          "action": "pa",
+          "sender": "Læseklubben",
+          "senderAddress": "klub@example.dk",
+          "sourcePath": "Inbox",
+          "destPath": ".PARA-personal/1_Current_projects/Taylor Swift Læseklub",
+          "flags": [
+            "create-folder"
+          ],
+          "needsChannel": false
+        },
+        {
+          "gateKey": "decisions-p001-1794300000000|2|E3|su",
+          "subject": "Slides for the KU interview",
+          "action": "su",
+          "sender": "Tanya",
+          "senderAddress": "tanya@ku.dk",
+          "sourcePath": "Inbox",
+          "destPath": "Inbox/Sunsama_task",
+          "flags": [
+            "su-no-channel"
+          ],
+          "needsChannel": true,
+          "scopeHint": "scope: work"
+        }
+      ],
+      "opCount": 3,
+      "watch": [
+        "tier-3 rows carry sender"
+      ]
+    }
+  },
+  "acts": [
+    {
+      "do": "toggleTier2",
+      "value": true
+    },
+    {
+      "do": "decline",
+      "key": "decisions-p001-1794300000000|1|E2|pa"
+    },
+    {
+      "do": "setReason",
+      "key": "decisions-p001-1794300000000|1|E2|pa",
+      "code": "plan-diverged"
+    },
+    {
+      "do": "approve",
+      "key": "decisions-p001-1794300000000|2|E3|su"
+    }
+  ],
+  "submitPayload": {
+    "stamp": "2026-11-10_11-39-18+01-00",
+    "tier2BlockConfirm": true,
+    "tier3": [
+      {
+        "gateKey": "decisions-p001-1794300000000|1|E2|pa",
+        "approved": false,
+        "channel": null,
+        "reason": "plan-diverged"
+      },
+      {
+        "gateKey": "decisions-p001-1794300000000|2|E3|su",
+        "approved": true,
+        "channel": null,
+        "reason": null
+      }
+    ]
+  },
+  "approvals": {
+    "tier2BlockConfirm": true,
+    "tier3": {
+      "decisions-p001-1794300000000|1|E2|pa": {
+        "approved": false,
+        "channel": null,
+        "reason": "plan-diverged"
+      },
+      "decisions-p001-1794300000000|2|E3|su": {
+        "approved": true,
+        "channel": null,
+        "reason": null
+      }
+    }
+  }
+}

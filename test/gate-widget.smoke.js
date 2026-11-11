@@ -1,7 +1,7 @@
 /* Live-render smoke for gate-widget.js — full initGate against a real DOM (jsdom).
  * Verifies the render + interaction the payload can't: tier sections render, the
  * Tier-2 block confirm toggles, per-Tier-3 approve/decline set state, the su
- * channel input is captured, and Submit emits the correct `gate:` payload.
+ * gate carries no inputs (S176), and Submit emits the correct `gate:` payload.
  * Run: `node test/gate-widget.smoke.js`. (S111, #308) */
 const fs = require("fs");
 const path = require("path");
@@ -76,8 +76,10 @@ ok("#331 no second line when sender IS the address (#270 parity)",
     .find(n => n.textContent.startsWith("faktura@e-boks.dk"))
     .querySelector(".tg-faddr") === null);
 ok("create-folder flag surfaced", document.body.textContent.includes("create-folder"));
-ok("su op shows a channel input", !!document.querySelector('[data-ch="batch-A|3|E4|su"]'));
-ok("non-su op has no channel input", !document.querySelector('[data-ch="batch-A|2|E3|pa"]'));
+ok("S176 no input anywhere on the gate (it collects no new information)",
+  document.querySelectorAll("input:not([type=checkbox]), textarea, select").length === 0);
+ok("su-no-channel row explains approve/decline instead", document.body.textContent.includes("No Sunsama channel was set on the card"));
+ok("no setChannel on the gate API", typeof window.GATE.setChannel === "undefined");
 ok("Tier-2 confirm starts unchecked", document.getElementById("tg-t2c").checked === false);
 ok("watch block rendered (#326)", !!document.querySelector(".tg-watch"));
 ok("watch item surfaced", document.body.textContent.includes("#290 card height"));
@@ -90,9 +92,7 @@ ok("approved pa button highlights", document.querySelector('[data-ap="batch-A|2|
 // Confirm the Tier-2 block.
 const t2c = document.getElementById("tg-t2c");
 t2c.checked = true; t2c.onchange();
-// Give the su op a channel but leave it unapproved.
-const chan = document.querySelector('[data-ch="batch-A|3|E4|su"]');
-chan.value = "Work"; chan.oninput();
+// Leave the su op undecided.
 
 console.log("== submit ==");
 window.GATE.submit();
@@ -104,7 +104,7 @@ const pa = p.tier3.find((t) => t.gateKey === "batch-A|2|E3|pa");
 const su = p.tier3.find((t) => t.gateKey === "batch-A|3|E4|su");
 ok("approved pa op -> approved:true", pa.approved === true);
 ok("undecided su op -> approved:false (fail-closed)", su.approved === false);
-ok("su channel captured even when undecided", su.channel === "Work");
+ok("every Tier-3 row submits channel:null", p.tier3.every((t) => t.channel === null));
 ok("post-submit confirmation shown", document.body.textContent.includes("Gate submitted"));
 
 console.log("== #380 decline reason ==");
@@ -117,15 +117,15 @@ ok("#380 declining reveals the reason picker",
 window.GATE.submit();
 ok("#380 submit blocked when a decline has no reason", lastPrompt === null);
 ok("#380 block message shown", document.body.textContent.includes("need a reason"));
-window.GATE.setReason("batch-A|2|E3|pa", "plan-wrong");
+window.GATE.setReason("batch-A|2|E3|pa", "plan-diverged");
 ok("#380 chosen reason highlights",
-  document.querySelector('[data-rz-key="batch-A|2|E3|pa"][data-rz-code="plan-wrong"]').classList.contains("on"));
+  document.querySelector('[data-rz-key="batch-A|2|E3|pa"][data-rz-code="plan-diverged"]').classList.contains("on"));
 window.GATE.submit();
 ok("#380 submit fires once a reason is chosen", lastPrompt && lastPrompt.indexOf("gate:") === 0);
 const p380 = JSON.parse(lastPrompt.slice("gate:".length));
 const pa380 = p380.tier3.find((t) => t.gateKey === "batch-A|2|E3|pa");
 ok("#380 declined op -> approved:false with structured reason",
-  pa380.approved === false && pa380.reason === "plan-wrong");
+  pa380.approved === false && pa380.reason === "plan-diverged");
 
 // Flipping a declined op back to approve must clear its reason.
 lastPrompt = null;

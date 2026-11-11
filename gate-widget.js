@@ -10,7 +10,7 @@
  *
  * Usage: initGate({ stamp, tier1Count, tier2:[...], tier3:[...], counts, opCount }).
  * On Submit it emits `sendPrompt("gate:" + JSON.stringify({stamp, tier2BlockConfirm,
- * tier3:[{gateKey, approved, channel}]}))`, which the skill routes (put_gate /
+ * tier3:[{gateKey, approved, channel: null, reason}]}))`, which the skill routes (put_gate /
  * onedrive-upload) to _scratch/artifact-gate-<stamp>-<ts>.json for present/gate_drain.py.
  *
  * Why this exists: at S109 the driving agent inferred approval from a scope
@@ -55,8 +55,7 @@
     + ".tg-b{border:1px solid #ccc;background:#fff;border-radius:6px;padding:3px 10px;cursor:pointer;font-size:13px}"
     + ".tg-b.tg-ap.on{background:#1a7f37;border-color:#1a7f37;color:#fff}"
     + ".tg-b.tg-dc.on{background:#b42318;border-color:#b42318;color:#fff}"
-    + ".tg-ch{margin-top:4px}"
-    + ".tg-ch input{font:13px inherit;padding:2px 6px;border:1px solid #ccc;border-radius:5px;width:180px}"
+    + ".tg-ch{margin-top:4px;color:#555;font-size:12px}"
     + ".tg-rz{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:6px 0 2px;padding-left:2px}"
     + ".tg-rl{color:#b42318;font-size:12px;font-weight:600}"
     + ".tg-rb{border:1px solid #d7a6a1;background:#fff;color:#8a2a20;border-radius:6px;padding:2px 9px;cursor:pointer;font-size:12px}"
@@ -70,10 +69,14 @@
     + ".tg-wl{margin:0;padding-left:18px}.tg-wl li{margin:2px 0}";
 
   // #380 — the fixed set of reasons a decline must carry, captured at the gate
-  // (never inferred afterward). `plan-wrong` is the carrier-attributable class.
-  // Keep the codes in step with present/approvals.py DECLINE_REASONS.
+  // (never inferred afterward). #513 (S176) split the old `plan-wrong`:
+  // `plan-diverged` is the carrier-attributable class (#200's decline arm);
+  // `my-decision-wrong` is a faithful plan of a wrong widget decision.
+  // The codes are pinned to present/approvals.py DECLINE_REASONS by the shared
+  // fixture test/fixtures/gate-contract.json (both suites assert against it).
   var DECLINE_REASONS = [
-    { code: "plan-wrong", label: "Plan/destination wrong" },
+    { code: "plan-diverged", label: "Plan doesn't do what I chose" },
+    { code: "my-decision-wrong", label: "I chose wrong" },
     { code: "changed-mind", label: "Changed my mind" },
     { code: "misclick", label: "Misclick" },
   ];
@@ -87,11 +90,11 @@
     var watch = cfg.watch || []; // operator In-file reminder, display-only (#326)
 
     // State. tier2Confirmed: one block toggle. tier3State: per-op approval +
-    // optional channel + (for an explicit decline) a structured reason (#380).
+    // (for an explicit decline) a structured reason (#380).
     // Undecided (approved === undefined) submits as approved:false, reason:null;
     // an explicit decline (approved === false) requires a reason before submit.
     var tier2Confirmed = false;
-    var tier3State = {}; // gateKey -> { approved: bool|undefined, channel, reason }
+    var tier3State = {}; // gateKey -> { approved: bool|undefined, reason }
     var submitted = false;
     var submitError = ""; // #380: shown when a declined row still needs a reason
 
@@ -104,7 +107,11 @@
           return {
             gateKey: op.gateKey,
             approved: d.approved === true,
-            channel: (d.channel && String(d.channel).trim()) || null,
+            // S176 (operator): the gate collects no new information. It approves
+            // or declines the plan as planned; a channel set here would never pass
+            // through the planner. `channel` stays in the shape for old approvals
+            // files and is always null from this widget (gate_drain enforces it).
+            channel: null,
             // Reason rides only an explicit decline; approved/undecided → null.
             reason: d.approved === false ? (d.reason || null) : null,
           };
@@ -115,9 +122,12 @@
     function moveHtml(op) {
       var flags = (op.flags && op.flags.length)
         ? '<div class="tg-flags">flags: ' + esc(op.flags.join(", ")) + "</div>" : "";
+      // su-no-channel: say what approving means; never ask for the channel here
+      // (S176: the gate collects no new information; the card takes it, #199).
       var chan = op.needsChannel
-        ? '<div class="tg-ch">channel <input data-ch="' + esc(op.gateKey) + '" placeholder="'
-          + esc(op.scopeHint ? "hint: " + op.scopeHint : "or leave blank to auto-predict") + '"></div>'
+        ? '<div class="tg-ch">No Sunsama channel was set on the card. Approve to let Sunsama assign one, '
+          + "or decline and set it on the card next sitting."
+          + (op.scopeHint ? " (" + esc(op.scopeHint) + ")" : "") + "</div>"
         : "";
       /* #331: sender on the gate row. #308 made this the un-skippable approval
          surface, and until now it showed subject + paths only — approving an
@@ -224,9 +234,6 @@
           GATE.setReason(b.getAttribute("data-rz-key"), b.getAttribute("data-rz-code"));
         };
       });
-      [].forEach.call(document.querySelectorAll("[data-ch]"), function (inp) {
-        inp.oninput = function () { GATE.setChannel(inp.getAttribute("data-ch"), inp.value); };
-      });
       var sub = document.getElementById("tg-submit");
       if (sub) sub.onclick = function () { GATE.submit(); };
     }
@@ -250,10 +257,6 @@
         s.reason = code;
         submitError = "";
         render();
-      },
-      setChannel: function (key, val) {
-        var s = tier3State[key] || (tier3State[key] = {});
-        s.channel = val;
       },
       toggleTier2: function (v) {
         tier2Confirmed = v == null ? !tier2Confirmed : !!v;
@@ -288,6 +291,9 @@
     return GATE;
   }
 
-  if (typeof window !== "undefined") window.initGate = initGate;
+  if (typeof window !== "undefined") {
+    window.initGate = initGate;
+    window.GATE_DECLINE_REASONS = DECLINE_REASONS.map(function (r) { return r.code; }); // contract hook
+  }
   if (typeof module !== "undefined" && module.exports) module.exports = { initGate: initGate };
 })();

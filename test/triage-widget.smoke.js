@@ -1444,6 +1444,67 @@ ok("#405f a genuinely new name is still proposed",
   nfRow2.user_typed_params.destination === ".PARA-work/1_Current_projects/Zephyr"
   && nfRow2.user_typed_params.folderState === "proposed");
 
+console.log("== #521 Create + select never fails silently ==");
+{
+  const $d = (id) => document.getElementById(id);
+  const hint = () => $d("tw-nf-hint");
+  // (a) empty name: hint shown, panel stays open, no decision.
+  window.initTriage({ batch: 1, total: 1, emails: [mkNF("Q1")], tree: nfTree });
+  document.querySelectorAll(".tw-dot")[0].onclick();
+  window.TW.decide("pa");
+  $d("tw-nfn").value = "   ";
+  window.TW.confirmNew();
+  ok("#521 empty name shows the required hint", hint().style.display === "block" && /Required/.test(hint().textContent));
+  ok("#521 empty name keeps the PARA panel open", $d("tw-pap").style.display === "block");
+  // (b) the hint resets when the panel closes.
+  window.TW.decide("pa"); // toggles closed
+  ok("#521 hint hidden after the panel closes", hint().style.display === "none");
+  // (c) a real click on the button with a typed new name (the operator's path)
+  // proposes the folder with isNew semantics (folderState: proposed).
+  window.TW.decide("pa");
+  $d("tw-nfn").value = "Taylor Swift Læseklub";
+  // runScripts "outside-only" does not run inline handlers, so evaluate the
+  // button's own onclick text in the page: this pins the wiring, not just the method.
+  const nfBtn = [...document.querySelectorAll("#tw-pap button")].find((b) => /Create \+ select/.test(b.textContent));
+  ok("#521 the button is wired to TW.confirmNew()", nfBtn && nfBtn.getAttribute("onclick") === "TW.confirmNew()");
+  window.eval(nfBtn.getAttribute("onclick"));
+  ok("#521 button click closes the panel", $d("tw-pap").style.display === "none");
+  lastPrompt = null; window.TW.submit();
+  const r = JSON.parse(lastPrompt.slice(6))[0];
+  ok("#521 click proposes the new folder (folderState proposed)",
+    r.decisionKey === "pa" && r.user_typed_params.destination === ".PARA-work/1_Current_projects/Taylor Swift Læseklub"
+    && r.user_typed_params.folderState === "proposed", JSON.stringify(r.user_typed_params));
+  // (d) Enter in the name field takes the same path.
+  window.initTriage({ batch: 1, total: 1, emails: [mkNF("Q2")], tree: nfTree });
+  document.querySelectorAll(".tw-dot")[0].onclick();
+  window.TW.decide("pa");
+  $d("tw-nfn").value = "Orion";
+  $d("tw-nfn").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  lastPrompt = null; window.TW.submit();
+  const r2 = JSON.parse(lastPrompt.slice(6))[0];
+  ok("#521 Enter in the name field proposes the folder", /\/Orion$/.test(r2.user_typed_params.destination) && r2.user_typed_params.folderState === "proposed");
+  // (e) a throw inside the handler is shown, the typed name is kept, the panel stays open.
+  // The widget holds cfg.tree by reference: dropping a side after the panel is
+  // built makes the new-folder path throw inside confirmNew.
+  const badTree = JSON.parse(JSON.stringify(nfTree));
+  window.initTriage({ batch: 1, total: 1, emails: [mkNF("Q3")], tree: badTree });
+  document.querySelectorAll(".tw-dot")[0].onclick();
+  window.TW.decide("pa");
+  $d("tw-nr").value = "personal";
+  delete badTree.personal;
+  $d("tw-nfn").value = "Vega";
+  const origErr = console.error; console.error = () => {};
+  let threw = false;
+  try { window.TW.confirmNew(); } catch (e) { threw = true; }
+  console.error = origErr;
+  ok("#521 a throw does not escape the handler", !threw);
+  ok("#521 a throw is shown inline", hint().style.display === "block" && /^Could not create the folder: /.test(hint().textContent), hint().textContent);
+  ok("#521 a throw keeps the typed name and the panel", $d("tw-nfn").value === "Vega" && $d("tw-pap").style.display === "block");
+  // (f) after an error, reopening the panel restores the required text.
+  window.TW.decide("pa");
+  ok("#521 hint text resets to the required message on close", hint().textContent === "Required — type a folder name." && hint().style.display === "none");
+}
+
 console.log("== #17 To recipients on outbound cards ==");
 const mkOut = (id, source, to) => ({
   id, sender: "me@audiomind.dk", date: "Mon 09 Jun 09:00",

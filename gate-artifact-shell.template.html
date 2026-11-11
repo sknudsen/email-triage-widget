@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email triage gate</title>
+<!--
+  The grouped-review gate as a durable published artifact with a db (#436, S176).
+
+  present.gate_page bakes the gate widget (public/gate-widget.js) and a small
+  page config into this document; the page is the same for every sitting, so it
+  is published once and reused (pointer: stage3-gate.json, present.card --kind gate).
+  Per sitting, nothing is republished:
+
+    out leg  the session writes the gate payload to db doc gate/config
+             (present.gate_page --config-doc, then write_db set with file_path).
+             This page reads it on load and refuses to show it unless the shape
+             and stamp check out.
+    in leg   the widget's Submit emits the raw `gate:{...}` string; this page
+             writes it verbatim to db doc gate/submit-<ts>. The session drains
+             it with read_db and `present.gate_drain --db-json`, which lands it as
+             _scratch/artifact-gate-<stamp>-<ts>.json, so gate_drain's existing
+             contract is untouched.
+    floor    a null db or a failed write shows the `gate:` string for copy-paste;
+             nothing is lost silently.
+
+  present.gate_page replaces two markers, each appearing exactly once below.
+  Do not repeat the literal marker tokens anywhere else in this file.
+-->
+<style>
+:root{color-scheme:light}
+body{margin:0;background:#fff;color:#1a1a1a}
+.gs{font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:760px;margin:0 auto;padding:16px}
+.gs-st{border-radius:8px;padding:9px 12px;margin:0 0 14px;background:#f4f5f7;color:#333}
+.gs-st.ok{background:#e8f5ec;color:#14532d}
+.gs-st.err{background:#fdecea;color:#7f1d1d}
+.gs-rec{display:none;margin:0 0 14px}
+.gs-rec textarea{width:100%;box-sizing:border-box;min-height:110px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="gs">
+  <div class="gs-st" id="gs-status" role="status" aria-live="polite">Loading the gate from this page's db…</div>
+  <div class="gs-rec" id="gs-rec">
+    <div id="gs-rec-msg"></div>
+    <textarea id="gs-rec-text" readonly></textarea>
+  </div>
+  <div id="tg-root"></div>
+</div>
+<script>
+/* __GATE_WIDGET_JS__ */
+</script>
+<script type="application/json" id="gs-config">/* __GATE_PAGE_CONFIG__ */</script>
+<script>
+(function () {
+  "use strict";
+  var CONFIG_DOC = "gate/config";
+  var SUBMIT_PREFIX = "gate/submit-";
+  var page = {};
+  try { page = JSON.parse(document.getElementById("gs-config").textContent) || {}; } catch (e) { page = {}; }
+  var SCHEMA = page.schema || 1;
+  var stamp = null;
+
+  function $(id) { return document.getElementById(id); }
+  function errText(e) { return (e && (e.message || e.toString())) || String(e); }
+  function status(msg, kind) {
+    var el = $("gs-status");
+    el.textContent = msg;
+    el.className = "gs-st" + (kind ? " " + kind : "");
+  }
+  function showRecovery(msg, text) {
+    $("gs-rec-msg").textContent = msg;
+    $("gs-rec-text").value = text;
+    $("gs-rec").style.display = "block";
+  }
+  function hideRecovery() { $("gs-rec").style.display = "none"; }
+
+  // One memoized db namespace (null => this view cannot use db).
+  var dbPromise = null;
+  function resolveDb() {
+    if (!dbPromise) {
+      dbPromise = (async function () {
+        try {
+          if (window.claude && typeof window.claude.use === "function") {
+            return await window.claude.use("db");
+          }
+        } catch (e) { console.info("[gate] claude.use(db) threw:", e); }
+        return null;
+      })();
+    }
+    return dbPromise;
+  }
+  function snapData(snap) {
+    if (!snap || snap.exists === false) { return null; }
+    if (typeof snap.data === "function") { return snap.data() || null; }
+    return null;
+  }
+
+  // Shape check before anything renders: a wrong or stale doc is refused, not
+  // half-shown (the same posture as the card's batch read, #482).
+  function checkConfig(d) {
+    if (!d) { return "no gate in this page's db yet (" + CONFIG_DOC + " is absent)"; }
+    if (d.v !== SCHEMA) { return "gate/config v=" + d.v + ", this page reads v=" + SCHEMA; }
+    if (typeof d.stamp !== "string" || !d.stamp) { return "gate/config has no stamp"; }
+    var p = d.payload;
+    if (!p || typeof p !== "object") { return "gate/config has no payload"; }
+    if (p.stamp !== d.stamp) { return "payload stamp " + p.stamp + " is not the doc stamp " + d.stamp; }
+    if (!Array.isArray(p.tier2) || !Array.isArray(p.tier3)) { return "payload lacks tier2/tier3 lists"; }
+    if (typeof d.opCount === "number" && d.opCount !== p.tier2.length + p.tier3.length) {
+      return "payload holds " + (p.tier2.length + p.tier3.length) + " ops, the doc says " + d.opCount;
+    }
+    return null;
+  }
+
+  function summary(signal) {
+    try {
+      var p = JSON.parse(signal.slice(5));
+      var t3 = p.tier3 || [];
+      var ok = t3.filter(function (t) { return t.approved === true; }).length;
+      return "Tier-2 block " + (p.tier2BlockConfirm ? "confirmed" : "NOT confirmed") +
+             ", Tier-3 " + ok + " approved / " + (t3.length - ok) + " not approved";
+    } catch (e) { return "payload unreadable here"; }
+  }
+
+  // The widget emits through sendPrompt; on this page that is the db write.
+  async function submitGate(signal) {
+    if (typeof signal !== "string" || signal.indexOf("gate:") !== 0) { return; }
+    var ts = Date.now();
+    var docPath = SUBMIT_PREFIX + ts;
+    var db = await resolveDb();
+    if (!db) {
+      status("Could not save: this view has no db. Copy the text below and paste it to the agent.", "err");
+      showRecovery("Gate submit (copy all of it):", signal);
+      window.TG_PAGE = { state: "recovery", reason: "no_db" };
+      return;
+    }
+    try {
+      await db.doc(docPath).set({ v: SCHEMA, stamp: stamp, ts: ts, signal: signal });
+      hideRecovery();
+      status("Gate saved ✓ " + summary(signal) + ". Tell the agent the gate is submitted. " +
+             "Submitting again replaces this (the latest wins).", "ok");
+      window.TG_PAGE = { state: "submitted", doc: docPath, ts: ts };
+    } catch (e) {
+      status("Saving to the db failed (" + errText(e) + "). Copy the text below and paste it to the agent.", "err");
+      showRecovery("Gate submit (copy all of it):", signal);
+      window.TG_PAGE = { state: "recovery", reason: "write_failed", detail: errText(e) };
+    }
+  }
+  window.sendPrompt = function (s) { submitGate(s); };
+
+  async function boot() {
+    if (typeof window.initGate !== "function") {
+      status("The gate widget did not load (initGate missing).", "err");
+      window.TG_PAGE = { state: "refused", reason: "no_widget" };
+      return;
+    }
+    var db = await resolveDb();
+    if (!db) {
+      status("This view can't read the gate's db. Open it signed in as the operator.", "err");
+      window.TG_PAGE = { state: "refused", reason: "no_db" };
+      return;
+    }
+    var d;
+    try { d = snapData(await db.doc(CONFIG_DOC).get()); }
+    catch (e) {
+      status("Reading the gate failed (" + errText(e) + "). Reload once; if it persists, tell the agent.", "err");
+      window.TG_PAGE = { state: "refused", reason: "read_failed" };
+      return;
+    }
+    var bad = checkConfig(d);
+    if (bad) {
+      status("Not showing a gate: " + bad + ".", "err");
+      window.TG_PAGE = { state: "refused", reason: "config", detail: bad };
+      return;
+    }
+    stamp = d.stamp;
+    var p = d.payload;
+    status("Gate for " + stamp + ": " + p.tier2.length + " Tier-2 and " + p.tier3.length +
+           " Tier-3 op(s). Review, then Submit gate once.", "");
+    window.TG_PAGE = { state: "ok", stamp: stamp };
+    window.initGate(p);
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

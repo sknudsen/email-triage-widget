@@ -76,6 +76,7 @@
 
   const SEC_NAMES = ["1 · Projects", "2 · Areas", "3 · Resources", "4 · Archive"];
   const SEC_KEYS = ["1_Current_projects", "2_Areas", "3_Resources", "4_Archive"];
+  const NF_REQUIRED = "Required — type a folder name."; // #521
 
   function initTriage(cfg) {
     const tree = cfg.tree;
@@ -503,7 +504,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
   </div>
   <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
   <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pmf" id="tw-pmf"></div><div class="tw-pg" id="tw-pgrid"></div>
-    <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" list="tw-nf-list" autocomplete="off" placeholder="New folder name…"/><datalist id="tw-nf-list"></datalist><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div></div></div>
+    <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" list="tw-nf-list" autocomplete="off" placeholder="New folder name…"/><datalist id="tw-nf-list"></datalist><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div><div class="tw-req" id="tw-nf-hint">Required — type a folder name.</div></div></div>
   <div id="tw-wdp" style="display:none"><div class="tw-dfp">
     <div class="tw-pt" id="tw-wd-title">Defer</div>
     <div id="tw-dfsub" style="display:none"><div class="tw-tsl" id="tw-dfsub-title">Defer subfolder · ↑↓ then Enter</div><div class="tw-dfg" id="tw-dfsgrid"></div></div>
@@ -1083,10 +1084,29 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       advance();
     }
 
+    // #521: the body of TW.confirmNew, split out so the caller can catch and show a throw.
+    function confirmNewInner() {
+      const sk = $("tw-nr").value, si = parseInt($("tw-ns").value), name = $("tw-nfn").value.trim();
+      if (!name) { $("tw-nf-hint").textContent = NF_REQUIRED; $("tw-nf-hint").style.display = "block"; return; }
+      // #405-followup (competing-names guard): if the typed name already exists
+      // in this scope+section, select the EXISTING folder rather than proposing
+      // a duplicate. The datalist surfaces those names as the operator types, so
+      // an accidental re-create of an Outlook/OneDrive folder becomes a pick.
+      const existing = ((tree[sk] && tree[sk].sections[si]) || [])
+        .find((l) => l && String(l.name).toLowerCase() === name.toLowerCase());
+      if (existing) {
+        selectPara(tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + existing.name, false, existing.folderState);
+      } else {
+        selectPara(tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + name, true);
+      }
+      $("tw-nfn").value = ""; // #521: cleared only on success, so a failure keeps the typed name
+    }
+
     /* --- Panels --- */
     function closeAll() {
       ["tw-pap", "tw-wdp", "tw-dep", "tw-cup", "tw-sup"].forEach((id) => { $(id).style.display = "none"; });
-      ["tw-de-hint", "tw-cu-hint"].forEach((id) => { $(id).style.display = "none"; }); // reset required hints
+      ["tw-de-hint", "tw-cu-hint", "tw-nf-hint"].forEach((id) => { $(id).style.display = "none"; }); // reset required hints
+      $("tw-nf-hint").textContent = NF_REQUIRED; // #521: an error message may have replaced it
       activePanel = null;
     }
     function togglePanel(id) {
@@ -1550,19 +1570,17 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       },
 
       confirmNew() {
-        const sk = $("tw-nr").value, si = parseInt($("tw-ns").value), name = $("tw-nfn").value.trim();
-        if (!name) return;
-        // #405-followup (competing-names guard): if the typed name already exists
-        // in this scope+section, select the EXISTING folder rather than proposing
-        // a duplicate. The datalist surfaces those names as the operator types, so
-        // an accidental re-create of an Outlook/OneDrive folder becomes a pick.
-        const existing = ((tree[sk] && tree[sk].sections[si]) || [])
-          .find((l) => l && String(l.name).toLowerCase() === name.toLowerCase());
-        $("tw-nfn").value = "";
-        if (existing) {
-          selectPara(tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + existing.name, false, existing.folderState);
-        } else {
-          selectPara(tree[sk].prefix + "/" + SEC_KEYS[si] + "/" + name, true);
+        // #521: on 11-09 this did nothing on the card, with no feedback, and it
+        // did not reproduce in jsdom or Chromium. Both silent paths now say why:
+        // an empty name shows the required hint, and a throw shows its message
+        // in the same slot, so the next live occurrence names its own cause.
+        const hint = $("tw-nf-hint");
+        try {
+          confirmNewInner();
+        } catch (e) {
+          hint.textContent = "Could not create the folder: " + ((e && e.message) || String(e));
+          hint.style.display = "block";
+          if (typeof console !== "undefined") console.error("[tw] confirmNew failed", e);
         }
       },
 
