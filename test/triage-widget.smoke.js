@@ -1559,6 +1559,82 @@ ok("#404 time-on-card accumulates across paging away and back (100+150=250)", r0
 ok("#404 second card's dwell accumulates too (150+150=300)", r1.timeOnCardMs === 300, "got " + r1.timeOnCardMs);
 delete window.__twNow;
 
+console.log("== #495 dev-note stays on its own card ==");
+{
+  // The 10-12 repro: decide card A (auto-advance to B), go back to A, type a
+  // note. Before the fix every render() added an input listener closing over
+  // its own card id, so one keystroke wrote the note onto every card visited.
+  window.initTriage({ batch: 1, total: 3, emails: [mkN("D0"), mkN("D1"), mkN("D2")], tree });
+  window.TW.decide("sk"); // D0 -> D1
+  window.TW.decide("sk"); // D1 -> D2
+  document.querySelectorAll(".tw-dot")[0].onclick(); // back to D0 (4th render)
+  const dn495 = document.getElementById("tw-devnote");
+  dn495.value = "only on D0";
+  dn495.dispatchEvent(new window.Event("input"));
+  window.TW.decide("sk"); // D0 re-decided; advances
+  document.querySelectorAll(".tw-dot")[2].onclick();
+  window.TW.decide("sk"); // D2
+  lastPrompt = null; window.TW.submit();
+  const rows495 = JSON.parse(lastPrompt.slice(6));
+  const noted = rows495.filter((r) => r.devNote).map((r) => r.emailId);
+  ok("#495 a note typed after navigating lands on that card only", noted.length === 1 && noted[0] === "D0", JSON.stringify(noted));
+  document.querySelectorAll(".tw-dot")[1].onclick();
+  ok("#495 visiting another card shows its own (empty) note", document.getElementById("tw-devnote").value === "");
+}
+
+console.log("== #496 two-char shorthands ending in a ==");
+{
+  const key = (k) => document.dispatchEvent(new window.KeyboardEvent("keydown", { key: k, bubbles: true }));
+  window.initTriage({ batch: 1, total: 2, emails: [mkN("K0"), mkN("K1")], tree });
+  key("p"); key("a");
+  ok("#496 `pa` opens the PARA picker", document.getElementById("tw-pap").style.display !== "none",
+    "pap display=" + document.getElementById("tw-pap").style.display);
+  ok("#496 `pa` records no Agree", !document.querySelector(".tw-ydec"), (document.querySelector(".tw-ydec") || {}).textContent);
+  key("Escape");
+  key("w"); key("a");
+  ok("#496 `wa` opens the waiting panel", document.getElementById("tw-wdp").style.display !== "none",
+    "wdp display=" + document.getElementById("tw-wdp").style.display);
+  key("Escape");
+  const sug = Object.assign(mkN("K2"), { suggestedAction: "sk", badgeLabel: "Keep" });
+  window.initTriage({ batch: 1, total: 1, emails: [sug], tree });
+  key("a");
+  ok("#496 a lone `a` still agrees", /All 1 decided/.test(document.getElementById("tw-card").textContent),
+    document.getElementById("tw-card").textContent.slice(0, 80));
+  window.initTriage({ batch: 1, total: 1, emails: [Object.assign(mkN("K3"), { suggestedAction: "sk", badgeLabel: "Keep" })], tree });
+  key("p"); key("a");
+  ok("#496 `pa` on a card suggesting Keep opens the picker, not Agree", document.getElementById("tw-pap").style.display !== "none");
+}
+
+console.log("== #497 page hotkeys: Enter submits, Shift+arrows page ==");
+{
+  const key = (k, o) => document.dispatchEvent(new window.KeyboardEvent("keydown", Object.assign({ key: k, bubbles: true }, o || {})));
+  const pageTxt = () => document.getElementById("tw-page").textContent;
+  const many = []; for (let i = 0; i < 20; i++) many.push(mkN("H" + i));
+  window.initTriage({ batch: 1, total: 20, emails: many, tree });
+  ok("#497 starts on page 1", /^Page 1 of 2/.test(pageTxt()), pageTxt());
+  key("ArrowRight", { shiftKey: true });
+  ok("#497 Shift+→ moves to page 2", /^Page 2 of 2/.test(pageTxt()), pageTxt());
+  key("ArrowRight", { shiftKey: true });
+  ok("#497 Shift+→ on the last page stays put", /^Page 2 of 2/.test(pageTxt()), pageTxt());
+  key("ArrowLeft", { shiftKey: true });
+  ok("#497 Shift+← moves back to page 1", /^Page 1 of 2/.test(pageTxt()), pageTxt());
+  lastPrompt = null;
+  key("Enter");
+  ok("#497 Enter on an undecided card submits nothing", lastPrompt === null);
+  let guard = 0;
+  while (!/All \d+ decided/.test(document.getElementById("tw-card").textContent) && guard++ < 30) window.TW.decide("sk");
+  ok("#497 page 1 reaches its completion card", /All \d+ decided/.test(document.getElementById("tw-card").textContent));
+  lastPrompt = null;
+  key("Enter");
+  ok("#497 Enter on the completion card submits the page", !!lastPrompt && lastPrompt.startsWith("batch:"), String(lastPrompt).slice(0, 20));
+  const n497 = lastPrompt ? JSON.parse(lastPrompt.slice(6)).length : 0;
+  lastPrompt = null;
+  key("Enter");
+  ok("#497 a second Enter goes to the next page, without resubmitting", /^Page 2 of 2/.test(pageTxt()) && lastPrompt === null, pageTxt());
+  ok("#497 the submitted batch is page 1's rows", n497 > 0 && n497 < 20, "rows=" + n497);
+  ok("#497 key hint names the page keys", /Shift\+← → page/.test(document.querySelector(".tw-kh").textContent));
+}
+
 console.log("== #375 thread grouping + newest marker ==");
 const mkTh = (id, conv, newest) => ({
   id, sender: "a@x.dk", date: "Mon 09 Jun 09:00", subject: "re: " + conv,
@@ -1656,5 +1732,41 @@ console.log("== #20 S172 action-button + control tooltips ==");
     codes.every((k) => !document.getElementById("btn-" + k).hasAttribute("data-tip")));
 }
 
-console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
-process.exit(fail ? 1 : 0);
+(async () => {
+  console.log("== #428 resume remembers a page only once it landed ==");
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const deck = () => [mkN("R0"), mkN("R1"), mkN("R2")];
+  const realSP = window.sendPrompt;
+  const decideAll = () => { for (let i = 0; i < 3; i++) window.TW.decide("sk"); };
+  // A page that fell to the recovery floor (shell resolves false) is not remembered.
+  window.localStorage.clear();
+  window.sendPrompt = () => Promise.resolve(false);
+  window.initTriage({ stamp: "S428a", batch: 1, total: 3, emails: deck(), tree });
+  decideAll(); window.TW.submit(); await tick();
+  window.initTriage({ stamp: "S428a", batch: 1, total: 3, emails: deck(), tree });
+  ok("#428 a page that did not land comes back after a reload", /3 of 3|1 of 3/.test(document.getElementById("tw-pos").textContent) && document.querySelectorAll(".tw-dot").length === 3,
+    "dots=" + document.querySelectorAll(".tw-dot").length);
+  ok("#428 no resume banner when nothing landed", !document.getElementById("tw-resume"));
+  // A page that landed (shell resolves true) is remembered, and the shortened deck says so.
+  window.localStorage.clear();
+  window.sendPrompt = () => Promise.resolve(true);
+  window.initTriage({ stamp: "S428b", batch: 1, total: 3, emails: deck().concat([mkN("R3"), mkN("R4"), mkN("R5"), mkN("R6"), mkN("R7"), mkN("R8"), mkN("R9"), mkN("R10"), mkN("R11"), mkN("R12"), mkN("R13")]), tree });
+  let g = 0; while (!/All \d+ decided/.test(document.getElementById("tw-card").textContent) && g++ < 30) window.TW.decide("sk");
+  window.TW.submit(); await tick();
+  window.initTriage({ stamp: "S428b", batch: 1, total: 14, emails: deck().concat([mkN("R3"), mkN("R4"), mkN("R5"), mkN("R6"), mkN("R7"), mkN("R8"), mkN("R9"), mkN("R10"), mkN("R11"), mkN("R12"), mkN("R13")]), tree });
+  const rb = document.getElementById("tw-resume");
+  ok("#428 a landed page is hidden on reopen", document.querySelectorAll(".tw-dot").length < 14, "dots=" + document.querySelectorAll(".tw-dot").length);
+  ok("#428 (c) the shortened deck carries a resume banner", !!rb && /already submitted earlier — showing the \d+ remaining/.test(rb.textContent), rb && rb.textContent);
+  // A rejected promise is treated as not landed.
+  window.localStorage.clear();
+  window.sendPrompt = () => Promise.reject(new Error("boom"));
+  window.initTriage({ stamp: "S428c", batch: 1, total: 3, emails: deck(), tree });
+  decideAll(); window.TW.submit(); await tick();
+  window.initTriage({ stamp: "S428c", batch: 1, total: 3, emails: deck(), tree });
+  ok("#428 a rejected send is not remembered", document.querySelectorAll(".tw-dot").length === 3);
+  window.sendPrompt = realSP;
+  ok("#428 card buttons read ◀ Card / Card ▶ (S178)", document.getElementById("tw-prev").textContent === "◀ Card" && document.getElementById("tw-next").textContent === "Card ▶");
+
+  console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
+  process.exit(fail ? 1 : 0);
+})();

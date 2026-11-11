@@ -132,6 +132,18 @@
       if (!STORE_KEY || !ids.length) return;
       try { const m = loadSubmitted(); ids.forEach((id) => { m[id] = true; }); window.localStorage.setItem(STORE_KEY, JSON.stringify(Object.keys(m))); } catch (e) {}
     }
+    /* #428 (a), operator S178: "submitted" means durably captured, not "sendPrompt
+       was called". The artifact shell's sendPrompt returns a promise that resolves
+       true only when a transport leg landed (db today); a page that fell to the
+       recovery floor is NOT remembered, so a reload shows it again instead of
+       hiding it. Hosts whose sendPrompt returns nothing (show_widget, the smokes)
+       keep the old persist-on-send behaviour. */
+    function sendBatch(out, ids) {
+      let r;
+      try { r = sendPrompt("batch:" + JSON.stringify(out)); } catch (e) { r = undefined; }
+      if (r && typeof r.then === "function") r.then((landed) => { if (landed === true) persistSubmitted(ids); }, () => {});
+      else persistSubmitted(ids);
+    }
     /* --- #464 sitting-marker signal. The published artifact shell installs
        window.TW_SIGNAL and writes the `sitting/current` db doc the scheduled
        `pre` tail reads before it republishes the durable card (#458). Hosts
@@ -147,6 +159,8 @@
 
     const priorSubmitted = loadSubmitted();
     const emails = (cfg.emails || []).filter((e) => !priorSubmitted[e.id]);
+    // #428 (c): a resumed, shortened deck says so, rather than reading as data loss.
+    const resumedCount = (cfg.emails || []).length - emails.length;
 
     // Everything in this snapshot was already triaged in a prior sitting.
     if (emails.length === 0) {
@@ -403,7 +417,9 @@ body{font-family:var(--font-sans,system-ui,sans-serif);color:var(--color-text-pr
 .tw-cl{font-size:10px;color:var(--color-text-tertiary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
 .tw-bg{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 .tw-bc{display:flex;flex-direction:column;gap:4px}
-button.tw-a{font-size:13px;padding:7px 8px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer;text-align:left;width:100%}
+button.tw-a{font-size:13px;padding:7px 8px;border-radius:var(--border-radius-md);border:.5px solid var(--color-border-secondary);background:transparent;color:var(--color-text-primary);cursor:pointer;text-align:left;width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* #449: every action label on one line, so the grid rows stay even on a phone. */
+@media (max-width:480px){button.tw-a{font-size:12px;padding:7px 6px}}
 button.tw-a:hover{background:var(--color-background-secondary)}
 button.tw-a:active{transform:scale(.98)}
 button.tw-a .tw-ac{font-size:10px;color:var(--color-text-tertiary);display:block;font-family:var(--font-mono)}
@@ -416,7 +432,10 @@ button.tw-a.sel .tw-ac{color:var(--color-text-success)}
 button.tw-a.armed{border-color:var(--color-text-warning);background:var(--color-background-warning);color:var(--color-text-warning);font-weight:600}
 button.tw-a.armed .tw-ac{color:var(--color-text-warning)}
 .tw-kh{font-size:11px;color:var(--color-text-tertiary);margin-top:8px;text-align:right}
+.tw-resume{font-size:12px;color:var(--color-text-secondary);background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:5px 9px;margin-bottom:8px}
 .tw-sr{margin-top:12px;text-align:center}
+/* #449 item 3: "N / M decided overall" on its own line, Submit below it (all widths). */
+.tw-sr>.tw-lbl{display:block;margin-bottom:8px}
 .tw-sb{font-size:14px;padding:10px 24px;border-radius:var(--border-radius-md);border:none;background:var(--color-border-info);color:#fff;cursor:pointer;font-weight:500}
 .tw-sb:disabled{opacity:.3;cursor:default}
 .tw-sb:hover:not(:disabled){opacity:.85}
@@ -493,8 +512,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     /* --- Build HTML --- */
     root.innerHTML = `
 <div style="padding:.5rem 0">
+  ${resumedCount > 0 ? `<div class="tw-resume" id="tw-resume">${resumedCount} card${resumedCount === 1 ? "" : "s"} already submitted earlier — showing the ${emails.length} remaining.</div>` : ""}
   <div class="tw-bar"><span class="tw-lbl" id="tw-page">Page 1 of 1</span><div class="tw-dots" id="tw-dots"></div><span class="tw-lbl" id="tw-dc">0 / 0 decided</span></div>
-  <div class="tw-nav"><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)"${gloss("nav.card")}>← Prev</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)"${gloss("nav.card")}>Next →</button></div>
+  <div class="tw-nav"><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)"${gloss("nav.card")}>◀ Card</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)"${gloss("nav.card")}>Card ▶</button></div>
   <div id="tw-card"></div>
   <div class="tw-bg">
     <div class="tw-bc"><div class="tw-cl">Meta</div><button class="tw-a" id="btn-ag" onclick="TW.decide('ag')"${gloss("act.ag")}><span class="tw-ac">a</span>Agree</button><button class="tw-a" id="btn-cu" onclick="TW.decide('cu')"${gloss("act.cu")}><span class="tw-ac">cu</span>Custom</button><button class="tw-a" id="btn-st" onclick="TW.decide('st')"${gloss("act.st")}><span class="tw-ac">st</span>Stop</button></div>
@@ -502,7 +522,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     <div class="tw-bc"><div class="tw-cl">Defer</div><button class="tw-a" id="btn-su" onclick="TW.decide('su')"${gloss("act.su")}><span class="tw-ac">su</span>Sunsama</button><button class="tw-a" id="btn-df" onclick="TW.decide('df')"${gloss("act.df")}><span class="tw-ac">df</span>Defer</button><button class="tw-a" id="btn-un" onclick="TW.decide('un')"${gloss("act.un")}><span class="tw-ac">un</span>Undecided</button></div>
     <div class="tw-bc"><div class="tw-cl">Archive</div><button class="tw-a" id="btn-pa" onclick="TW.decide('pa')"${gloss("act.pa")}><span class="tw-ac">pa</span>PARA folder</button><button class="tw-a" id="btn-ar" onclick="TW.decide('ar')"${gloss("act.ar")}><span class="tw-ac">tr</span>Triage dump</button><button class="tw-a" id="btn-sk" onclick="TW.decide('sk')"${gloss("act.sk")}><span class="tw-ac">ke</span>Keep</button></div>
   </div>
-  <div class="tw-kh">← → navigate · type shorthand to decide · Enter in PARA tree confirms</div>
+  <div class="tw-kh">← → card · Shift+← → page · type shorthand to decide · Enter in PARA tree confirms</div>
   <div id="tw-pap" style="display:none"><div class="tw-pnl"><div class="tw-pt">Choose PARA folder</div><div class="tw-pmf" id="tw-pmf"></div><div class="tw-pg" id="tw-pgrid"></div>
     <div class="tw-nfr"><select id="tw-nr"><option value="work">work</option><option value="personal">personal</option></select><select id="tw-ns"><option value="0">1 · Projects</option><option value="1">2 · Areas</option><option value="2">3 · Resources</option><option value="3">4 · Archive</option></select><input type="text" id="tw-nfn" list="tw-nf-list" autocomplete="off" placeholder="New folder name…"/><datalist id="tw-nf-list"></datalist><button class="tw-cb" onclick="TW.confirmNew()">Create + select</button></div><div class="tw-req" id="tw-nf-hint">Required — type a folder name.</div></div></div>
   <div id="tw-wdp" style="display:none"><div class="tw-dfp">
@@ -766,11 +786,9 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // root template; here we just re-seed its value for the current card from the
       // per-emailId store. `renderDevNote()` also runs from the completion card.
       renderDevNote(e.id);
-      // #286: bind the dev-note input to its per-card store. `input` keeps
-      // cardNotes[e.id] live as the operator types; the value is re-seeded from
-      // the store on every render above, so navigation never loses a note.
-      const dnEl = $("tw-devnote");
-      if (dnEl) dnEl.addEventListener("input", () => { cardNotes[e.id] = dnEl.value; });
+      // #495: no listener here. `tw-devnote` is persistent, so binding per render
+      // stacked one handler per visited card and a keystroke wrote the note onto
+      // all of them. The single init-time handler writes to the live `devNoteId`.
       // #311: bind the armed mark's confirm as a real listener rather than an
       // inline onclick attribute — same pattern as the PARA leaf rows. Inline
       // handlers are invisible to the jsdom smoke (runScripts: "outside-only"),
@@ -838,7 +856,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         if (q) h += '<div class="tw-quote">' + escHtml(q) + "</div>";
       } else {
         h += '<div class="tw-cc-h">✓ All ' + total + " decided</div>";
-        h += '<div class="tw-cc-s">Every card on this page has a decision. Review with ← Prev, or submit the page below.</div>';
+        h += '<div class="tw-cc-s">Every card on this page has a decision. Review with ◀ Card, or submit the page below (Enter).</div>';
       }
       h += "</div>";
       $("tw-card").innerHTML = h;
@@ -1562,7 +1580,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
           // way submit() does — a note/duration must not be lost on the Stop path.
           if (decisions[i] && !submittedPages[p]) { out.push(finalizeRow(decisions[i], emails[i].id)); ids.push(emails[i].id); }
         }
-        if (out.length) { sendPrompt("batch:" + JSON.stringify(out)); persistSubmitted(ids); }
+        if (out.length) sendBatch(out, ids); // #428: persist on ack
         stopped = true;
         twSignal("sitting_done", { by: "stop" }); // #464: Stop ends the sitting for good
 
@@ -1644,9 +1662,8 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
         // time-on-card. Additive — the Stage 2 decision fields are untouched.
         for (let i = b.start; i < b.end; i++) { if (decisions[i]) { out.push(finalizeRow(decisions[i], emails[i].id)); ids.push(emails[i].id); } } // omit untouched
         if (!out.length) return;
-        sendPrompt("batch:" + JSON.stringify(out));
+        sendBatch(out, ids); // #428: remembered for resume only once the shell confirms it landed
         submittedPages[curPage] = true;
-        persistSubmitted(ids); // remember for resume — skip on next open (no 404)
         /* #464: a page submit is operator activity (it refreshes the lock), and
            the LAST page closes the sitting — there is nothing left on the card
            that a republish could destroy. */
@@ -1722,7 +1739,14 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     $("tw-wd-note").addEventListener("input", () => clearPf("tw-wd-note")); // pre-filled → typed (item 9)
     $("tw-wd-date").addEventListener("input", () => clearPf("tw-wd-date"));
 
-    document.addEventListener("keydown", function (e) {
+    // Two-char shorthand -> decision token (#354: `tr`->ar, `ke`->sk). Hoisted so the
+    // single-key `a` check can see whether `a` completes a buffered prefix (#496).
+    const SHORTHAND = { cu: "cu", st: "st", ke: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", tr: "ar" };
+    // #496: one keydown handler per page. Each initTriage() used to add another,
+    // and the stacked handlers share `window._kbBuf`, so a re-init (the smoke does
+    // many; the shell does one today) clobbered the two-char buffer.
+    if (window.__twKeydown) document.removeEventListener("keydown", window.__twKeydown);
+    window.__twKeydown = function (e) {
       if (activePanel === "tw-pap") {
         if (document.activeElement === $("tw-nfn")) return;
         const side = fCol === 0 ? "work" : "personal";
@@ -1749,6 +1773,11 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // Completion card: Enter advances to the next page once this page is
       // submitted — the keyboard twin of the footer "Next page →" button (#21).
       if (showCompletion && e.key === "Enter" && submittedPages[curPage] && curPage < pageCount - 1) { e.preventDefault(); window.TW.goPage(1); return; }
+      // #497 (operator, S178): Enter on the completion card submits the page, so
+      // a page ends Enter (submit), Enter (next page). Same gate as the button:
+      // only when it is enabled (every card decided, not yet submitted).
+      if (showCompletion && e.key === "Enter" && !submittedPages[curPage] && !stopped && !$("tw-sub").disabled &&
+          !($("tw-stopbar") && $("tw-stopbar").style.display !== "none")) { e.preventDefault(); window.TW.submit(); return; }
       const sbar = $("tw-stopbar");
       if (e.key === "Escape" && sbar && sbar.style.display !== "none") { window.TW.cancelStop(); return; }
       if (e.key === "Escape" && activePanel) { closeAll(); return; }
@@ -1769,8 +1798,13 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // preserved (on an escalating card the first `a` arms; confirm on the mark
       // or Enter). Only on a base card — never while a panel / stop bar / the
       // completion screen is up, mirroring the arm handler's guards.
-      if (e.key === "a" && !activePanel && !showCompletion && !stopOpen) { e.preventDefault(); window._kbBuf = ""; window.TW.decide("ag"); return; }
+      // #496: but not when `a` completes a buffered two-char shorthand (`pa`,
+      // `wa`). This branch used to run first and swallow the second key, so `pa`
+      // recorded Agree (or nothing, on a card with no suggestion).
+      if (e.key === "a" && !activePanel && !showCompletion && !stopOpen && !SHORTHAND[(window._kbBuf || "") + "a"]) { e.preventDefault(); window._kbBuf = ""; window.TW.decide("ag"); return; }
       if (e.key === "i") { e.preventDefault(); window.TW.toggleDetails(); return; } // S40: open/close details
+      // #497: Shift+←/→ move a whole page, like the footer ◀ Page / Page ▶ buttons.
+      if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) { e.preventDefault(); window.TW.goPage(e.key === "ArrowLeft" ? -1 : 1); return; }
       if (e.key === "ArrowLeft") { e.preventDefault(); window.TW.go(-1); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); window.TW.go(1); return; }
       // #354: `tr` (TRiage) is the keybinding for the archive / Triage-dump
@@ -1783,11 +1817,12 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
       // same keybind-vs-token split as `tr`→`ar`. `k` starts no other code, so
       // `ke` collides with nothing, and it moves Keep off the crowded `s` cluster
       // (su/st). The button still decides on click via decide("sk").
-      const map = { cu: "cu", st: "st", ke: "sk", do: "do", de: "de", wa: "wa", su: "su", df: "df", un: "un", pa: "pa", tr: "ar" };
+      const map = SHORTHAND;
       const buf = window._kbBuf || "", cand = buf + e.key;
       if (map[cand]) { e.preventDefault(); window._kbBuf = ""; window.TW.decide(map[cand]); return; }
       if ("cdwusptk".includes(e.key.toLowerCase())) { window._kbBuf = e.key; setTimeout(() => { if (window._kbBuf === e.key) window._kbBuf = ""; }, 600); } else window._kbBuf = "";
-    });
+    };
+    document.addEventListener("keydown", window.__twKeydown);
 
     /* --- Init --- */
     render();

@@ -252,6 +252,12 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     } catch (e) { console.warn("[shell] TW_SIGNAL failed:", e); }
   };
 
+  // #449: "2026-09-06_14-51-16+02-00" -> "09-06 14:51"; anything else unchanged.
+  function shortStamp(st) {
+    var m = /^\d{4}-(\d{2}-\d{2})_(\d{2})-(\d{2})/.exec(st || "");
+    return m ? m[1] + " " + m[2] + ":" + m[3] : (st || "?");
+  }
+
   function status(msg, cls) {
     var s = document.getElementById("tw-status");
     s.textContent = msg;
@@ -308,7 +314,12 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
 
   window.sendPrompt = function (text) {
     try {
-      if (typeof text === "string" && text.indexOf("batch:") === 0) { uploadSubmit(text); }
+      // #428: return whether the page landed (true) or fell to the recovery floor
+      // (false), so the widget remembers a page as submitted only once it is durable.
+      if (typeof text === "string" && text.indexOf("batch:") === 0) {
+        return uploadSubmit(text).then(function (landed) { return landed === true; },
+                                       function () { return false; });
+      }
       else if (typeof text === "string" && text.indexOf("details:") === 0) {
         status("Details requested for " + text.slice("details:".length) +
                " — details round-trip is not wired in this build.", "");
@@ -386,7 +397,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
           status("No automated transport is wired -- your " + n + " decisions are " +
                  "parked below. Copy them out and hand them to the agent.", "err");
         }
-        return;
+        return false;
       }
 
       if (leg === "db") {
@@ -408,7 +419,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
           status("Page submitted ✓ (db) -- " + n + " decisions written to the " +
                  "artifact store. " + submitCount + " page(s) this sitting. The " +
                  "agent drains + logs each page.", "ok");
-          return;
+          return true;
         } catch (e) {
           loud.push("db: " + errText(e));
           console.warn("[shell] db leg ERRORED -- next:", e);
@@ -429,7 +440,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
             { stamp: stamp || "nostamp", seq: seq, payload: signal });
           status("Page submitted ✓ (local transport) -- " + n + " decisions. " +
                  submitCount + " page(s) this sitting. The agent drains + logs each page.", "ok");
-          return;
+          return true;
         } catch (e) {
           if (isAbsence(e)) { console.info("[shell] host: leg absent -- next:", e); }
           else { loud.push("host: " + errText(e)); console.warn("[shell] host: leg ERRORED -- next:", e); }
@@ -452,7 +463,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
           });
           status("Page submitted ✓ (connector) -- " + n + " decisions written to _scratch/" +
                  fname + ". " + submitCount + " page(s) this sitting. The agent drains + logs each page.", "ok");
-          return;
+          return true;
         } catch (e) {
           if (isAbsence(e)) { console.info("[shell] connector leg absent -- next:", e); }
           else { loud.push("connector: " + errText(e)); console.warn("[shell] connector leg ERRORED -- next:", e); }
@@ -472,6 +483,7 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     } else {
       status("No transport leg landed -- decisions parked below; paste to the agent.", "err");
     }
+    return false;
   }
 
   // ---- #482 batch from db ---------------------------------------------------
@@ -610,9 +622,12 @@ body{background:var(--color-background-primary);margin:0;padding:14px;font-famil
     driveId = cfg.driveId || null;
     scratchItemId = cfg.scratchItemId || null;
     var n = (cfg.emails || []).length;
-    status("Loaded " + n + " of " + (cfg.total != null ? cfg.total : "?") +
-           " (stamp " + (cfg.stamp || "?") + ")" + (note || "") + ". Decide each card, then Submit page " +
-           "— each page is saved on its own, so you can stop any time.", "");
+    // #449: one line on a phone. The full stamp and the standing instruction move
+    // to the banner's tooltip; the visible text keeps the count and a short stamp.
+    status("Loaded " + n + "/" + (cfg.total != null ? cfg.total : "?") +
+           " · " + shortStamp(cfg.stamp) + (note || ""), "");
+    document.getElementById("tw-status").title = "Stamp " + (cfg.stamp || "?") +
+      ". Decide each card, then Submit page — each page is saved on its own, so you can stop any time.";
     window.initTriage(cfg);
   }
 
