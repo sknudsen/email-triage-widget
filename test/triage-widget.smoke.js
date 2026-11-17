@@ -1484,14 +1484,13 @@ console.log("== #521 Create + select never fails silently ==");
   const r2 = JSON.parse(lastPrompt.slice(6))[0];
   ok("#521 Enter in the name field proposes the folder", /\/Orion$/.test(r2.user_typed_params.destination) && r2.user_typed_params.folderState === "proposed");
   // (e) a throw inside the handler is shown, the typed name is kept, the panel stays open.
-  // The widget holds cfg.tree by reference: dropping a side after the panel is
-  // built makes the new-folder path throw inside confirmNew.
-  const badTree = JSON.parse(JSON.stringify(nfTree));
-  window.initTriage({ batch: 1, total: 1, emails: [mkNF("Q3")], tree: badTree });
+  // S182: the widget now clones cfg.tree, so the throw is forced through the DOM:
+  // a section index with no section behind it makes the new-folder push throw.
+  window.initTriage({ batch: 1, total: 1, emails: [mkNF("Q3")], tree: JSON.parse(JSON.stringify(nfTree)) });
   document.querySelectorAll(".tw-dot")[0].onclick();
   window.TW.decide("pa");
-  $d("tw-nr").value = "personal";
-  delete badTree.personal;
+  $d("tw-ns").add(new window.Option("bogus", "9"));
+  $d("tw-ns").value = "9";
   $d("tw-nfn").value = "Vega";
   const origErr = console.error; console.error = () => {};
   let threw = false;
@@ -1503,6 +1502,27 @@ console.log("== #521 Create + select never fails silently ==");
   // (f) after an error, reopening the panel restores the required text.
   window.TW.decide("pa");
   ok("#521 hint text resets to the required message on close", hint().textContent === "Required — type a folder name." && hint().style.display === "none");
+  // (g) S182, the live cause: a db-loaded batch hands the widget a frozen config,
+  // and the new-folder path pushed onto that frozen section array ("Cannot add
+  // property N, object is not extensible"). Deep-freeze the tree like the db does.
+  const deepFreeze = (o) => { if (o && typeof o === "object") { Object.values(o).forEach(deepFreeze); Object.freeze(o); } return o; };
+  const frozenTree = deepFreeze(JSON.parse(JSON.stringify(nfTree)));
+  window.initTriage({ batch: 1, total: 1, emails: [mkNF("Q4")], tree: frozenTree });
+  document.querySelectorAll(".tw-dot")[0].onclick();
+  window.TW.decide("pa");
+  $d("tw-nr").value = "work"; $d("tw-ns").value = "0";
+  $d("tw-nfn").value = "Frozen Lake"; // a name no earlier step has pushed into nfTree
+  const origErr2 = console.error; console.error = () => {};
+  window.TW.confirmNew();
+  console.error = origErr2;
+  ok("#521 a frozen tree shows no error", hint().style.display === "none", hint().textContent);
+  ok("#521 a frozen tree closes the panel", $d("tw-pap").style.display === "none");
+  lastPrompt = null; window.TW.submit();
+  const r4 = lastPrompt && JSON.parse(lastPrompt.slice(6))[0];
+  ok("#521 a frozen tree still proposes the new folder",
+    r4 && r4.decisionKey === "pa" && r4.user_typed_params.destination === ".PARA-work/1_Current_projects/Frozen Lake"
+    && r4.user_typed_params.folderState === "proposed", r4 && JSON.stringify(r4.user_typed_params));
+  ok("#521 the caller's frozen tree is left untouched", frozenTree.work.sections[0].every((l) => l.name !== "Frozen Lake"));
 }
 
 console.log("== #17 To recipients on outbound cards ==");

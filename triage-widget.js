@@ -79,7 +79,11 @@
   const NF_REQUIRED = "Required — type a folder name."; // #521
 
   function initTriage(cfg) {
-    const tree = cfg.tree;
+    // #521 (S182): a db-loaded batch (#482) hands over a frozen config, and the
+    // new-folder path grows the tree (selectPara). Own a plain copy: the tree is
+    // JSON from Stage 2, so a JSON round-trip is a faithful deep clone, and the
+    // caller's object is never mutated.
+    const tree = cfg.tree ? JSON.parse(JSON.stringify(cfg.tree)) : cfg.tree;
     const batchNum = cfg.batch || 1;
     const quotes = (cfg.quotes && cfg.quotes.length) ? cfg.quotes.slice() : [];
     const stamp = cfg.stamp || null;
