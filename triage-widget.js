@@ -135,6 +135,32 @@
     function persistSubmitted(ids) {
       if (!STORE_KEY || !ids.length) return;
       try { const m = loadSubmitted(); ids.forEach((id) => { m[id] = true; }); window.localStorage.setItem(STORE_KEY, JSON.stringify(Object.keys(m))); } catch (e) {}
+      clearDraft(ids); // #540: a landed page's draft is no longer needed
+    }
+    /* --- #540 draft restore. Decisions on a page not yet landed lived in memory
+       only, so a reload or interruption lost them without a word. Each render
+       saves every decided-but-not-landed card to localStorage under
+       triage:draft:<stamp>, keyed by emailId; reopening restores them and says
+       how many. A page's entries are dropped when it lands (persistSubmitted,
+       the #428 ack), never on mere send, so a page that fell to the recovery
+       floor keeps its draft. Widget-local and gated on `stamp`, like #428. */
+    const DRAFT_KEY = stamp ? ("triage:draft:" + stamp) : null;
+    const landedIds = {};
+    function loadDraft() {
+      if (!DRAFT_KEY) return {};
+      try { const raw = window.localStorage.getItem(DRAFT_KEY); const m = raw ? JSON.parse(raw) : {}; return (m && typeof m === "object") ? m : {}; } catch (e) { return {}; }
+    }
+    function writeDraft(m) {
+      if (!DRAFT_KEY) return;
+      try {
+        if (Object.keys(m).length) window.localStorage.setItem(DRAFT_KEY, JSON.stringify(m));
+        else window.localStorage.removeItem(DRAFT_KEY);
+      } catch (e) {}
+    }
+    function clearDraft(ids) {
+      if (!DRAFT_KEY) return;
+      ids.forEach((id) => { landedIds[id] = true; });
+      const m = loadDraft(); ids.forEach((id) => { delete m[id]; }); writeDraft(m);
     }
     /* #428 (a), operator S178: "submitted" means durably captured, not "sendPrompt
        was called". The artifact shell's sendPrompt returns a promise that resolves
@@ -253,6 +279,26 @@
     // to the decided cards stays available (it is not a terminal overlay).
     let showCompletion = false;
     const decisions = emails.map(() => null);
+    // #540: bring back the decisions an interrupted page had made.
+    let restoredCount = 0;
+    (function restoreDraft() {
+      const m = loadDraft();
+      emails.forEach((e, i) => {
+        const d = m[e.id];
+        if (d && typeof d === "object" && d.decisionKey) { decisions[i] = d; restoredCount++; }
+      });
+      // No #464 signal here: boot never takes the lock (test_sitting). The
+      // marker was raised when these decisions were first made, and the next
+      // decision raises it again.
+    })();
+    function saveDraft() {
+      if (!DRAFT_KEY) return;
+      const m = {};
+      for (let i = 0; i < emails.length; i++) {
+        if (decisions[i] && !landedIds[emails[i].id]) m[emails[i].id] = decisions[i];
+      }
+      writeDraft(m);
+    }
     // #286: per-card development note, keyed by emailId. Captured independent of
     // the action (a note ABOUT the card, not an action parameter) and folded into
     // the emitted row at submit — so it survives the operator changing their mind
@@ -516,6 +562,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     /* --- Build HTML --- */
     root.innerHTML = `
 <div style="padding:.5rem 0">
+  ${restoredCount > 0 ? `<div class="tw-resume" id="tw-restored">${restoredCount} decision${restoredCount === 1 ? "" : "s"} restored from before the interruption — not yet submitted.</div>` : ""}
   ${resumedCount > 0 ? `<div class="tw-resume" id="tw-resume">${resumedCount} card${resumedCount === 1 ? "" : "s"} already submitted earlier — showing the ${emails.length} remaining.</div>` : ""}
   <div class="tw-bar"><span class="tw-lbl" id="tw-page">Page 1 of 1</span><div class="tw-dots" id="tw-dots"></div><span class="tw-lbl" id="tw-dc">0 / 0 decided</span></div>
   <div class="tw-nav"><button class="tw-nbtn" id="tw-prev" onclick="TW.go(-1)"${gloss("nav.card")}>◀ Card</button><span class="tw-lbl" id="tw-pos"></span><button class="tw-nbtn" id="tw-next" onclick="TW.go(1)"${gloss("nav.card")}>Card ▶</button></div>
@@ -606,6 +653,7 @@ input.tw-pf{border-left:2px solid var(--color-border-info);font-style:italic}
     }
 
     function render() {
+      saveDraft(); // #540: every decision path ends in a render
       closeAll();
       // #404: every cur change ends here, so this is the one place that owns the
       // time-on-card interval. Flush the card we are leaving, then (for a real

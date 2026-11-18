@@ -34,6 +34,7 @@ body{margin:0;background:#fff;color:#1a1a1a}
 .gs-st{border-radius:8px;padding:9px 12px;margin:0 0 14px;background:#f4f5f7;color:#333}
 .gs-st.ok{background:#e8f5ec;color:#14532d}
 .gs-st.err{background:#fdecea;color:#7f1d1d}
+.gs-again{font:inherit;padding:6px 12px;border-radius:6px;border:1px solid #c9ccd1;background:#fff;cursor:pointer}
 .gs-rec{display:none;margin:0 0 14px}
 .gs-rec textarea{width:100%;box-sizing:border-box;min-height:110px;font:12px ui-monospace,SFMono-Regular,Menlo,monospace}
 </style>
@@ -148,6 +149,49 @@ body{margin:0;background:#fff;color:#1a1a1a}
   }
   window.sendPrompt = function (s) { submitGate(s); };
 
+  /* #541: a gate opened cold says whether it has already been answered. Reads
+     the newest gate/submit-* doc carrying this stamp. Display only (S176: the
+     gate collects no new information). Any read problem, or a runtime with no
+     collection query, falls back to the form: never block a gate on this. */
+  async function latestSubmit(db, forStamp) {
+    try {
+      if (typeof db.collection !== "function") { return null; }
+      var snap = await db.collection("gate").where("stamp", "==", forStamp).get();
+      var best = null;
+      (snap && snap.docs || []).forEach(function (doc) {
+        if (!doc || doc.exists === false || String(doc.id).indexOf("submit-") !== 0) { return; }
+        var d = typeof doc.data === "function" ? doc.data() : null;
+        if (!d || typeof d.signal !== "string" || typeof d.ts !== "number") { return; }
+        if (!best || d.ts > best.ts) { best = { id: doc.id, ts: d.ts, signal: d.signal }; }
+      });
+      return best;
+    } catch (e) {
+      console.info("[gate] reading earlier submits failed:", e);
+      return null;
+    }
+  }
+  function submittedLine(sub) {
+    var when = new Date(sub.ts);
+    var hhmm = isNaN(when.getTime()) ? "" :
+      (when.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " " +
+       when.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }));
+    var tail;
+    try {
+      var p = JSON.parse(sub.signal.slice(5));
+      var t3 = p.tier3 || [];
+      var ok = t3.filter(function (t) { return t.approved === true; }).length;
+      var reasons = {};
+      t3.forEach(function (t) {
+        if (t.approved !== true) { var r = t.reason || "none"; reasons[r] = (reasons[r] || 0) + 1; }
+      });
+      var dec = Object.keys(reasons).map(function (r) { return r + " " + reasons[r]; });
+      tail = "Tier-3 " + ok + "/" + t3.length + " approved" +
+        (dec.length ? " (not approved: " + dec.join(", ") + ")" : "") +
+        ", Tier-2 block " + (p.tier2BlockConfirm ? "confirmed" : "NOT confirmed");
+    } catch (e) { tail = "payload unreadable here"; }
+    return "Submitted" + (hhmm ? " " + hhmm : "") + " · " + tail + ".";
+  }
+
   async function boot() {
     if (typeof window.initGate !== "function") {
       status("The gate widget did not load (initGate missing).", "err");
@@ -175,6 +219,39 @@ body{margin:0;background:#fff;color:#1a1a1a}
     }
     stamp = d.stamp;
     var p = d.payload;
+    var prior = await latestSubmit(db, stamp);
+    // A gate republished for the same stamp with more ops is not answered by an
+    // older submit: show it as answered only when that submit covers every
+    // Tier-3 op on this gate.
+    var uncovered = 0;
+    if (prior) {
+      try {
+        var seen = {};
+        (JSON.parse(prior.signal.slice(5)).tier3 || []).forEach(function (t) { seen[t.gateKey] = true; });
+        uncovered = p.tier3.filter(function (op) { return !seen[op.gateKey]; }).length;
+      } catch (e) { uncovered = p.tier3.length; }
+    }
+    if (prior && uncovered) {
+      status("Gate for " + stamp + ": " + p.tier2.length + " Tier-2 and " + p.tier3.length +
+             " Tier-3 op(s). An earlier answer exists but does not cover " + uncovered +
+             " of them; review and submit again.", "");
+      window.TG_PAGE = { state: "ok", stamp: stamp, partialPrior: "gate/" + prior.id };
+      window.initGate(p);
+      return;
+    }
+    if (prior) {
+      status("Gate for " + stamp + " is already answered. " + submittedLine(prior) +
+             " Nothing more to do here unless you want to change it.", "ok");
+      $("tg-root").innerHTML = '<button type="button" class="gs-again" id="gs-again">Review and submit again (the latest wins)</button>';
+      $("gs-again").onclick = function () {
+        status("Gate for " + stamp + ": " + p.tier2.length + " Tier-2 and " + p.tier3.length +
+               " Tier-3 op(s). Submitting again replaces the earlier answer.", "");
+        window.TG_PAGE = { state: "ok", stamp: stamp, resubmit: true };
+        window.initGate(p);
+      };
+      window.TG_PAGE = { state: "already_submitted", stamp: stamp, doc: "gate/" + prior.id, ts: prior.ts };
+      return;
+    }
     status("Gate for " + stamp + ": " + p.tier2.length + " Tier-2 and " + p.tier3.length +
            " Tier-3 op(s). Review, then Submit gate once.", "");
     window.TG_PAGE = { state: "ok", stamp: stamp };

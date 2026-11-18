@@ -400,6 +400,33 @@ window.initTriage({ stamp: STAMP, batch: 1, total: 20, emails: mkS(20), tree, qu
 ok("reopen after all done -> inbox-zero terminal", /Inbox zero/.test(document.getElementById("tw-root").textContent) && !document.getElementById("tw-card"));
 try { window.localStorage.clear(); } catch (e) {}
 
+/* ===== #540 draft restore: an interrupted page keeps its decisions ===== */
+console.log("\n== draft restore (#540) ==");
+try { window.localStorage.clear(); } catch (e) {}
+window.initTriage({ stamp: STAMP, batch: 1, total: 5, emails: mkS(5), tree, quotes });
+ok("fresh page shows no restored line", !document.getElementById("tw-restored"));
+document.querySelectorAll(".tw-dot")[0].onclick(); window.TW.decide("ar");
+document.querySelectorAll(".tw-dot")[2].onclick(); window.TW.decide("sk");
+// Interruption: the same artifact re-inits without a submit.
+window.initTriage({ stamp: STAMP, batch: 1, total: 5, emails: mkS(5), tree, quotes });
+const rl = document.getElementById("tw-restored");
+ok("reopen says 2 decisions restored", !!rl && /^2 decisions restored/.test(rl.textContent));
+ok("restored dots are marked decided",
+  document.querySelectorAll(".tw-dot")[0].className.indexOf("decided") !== -1 &&
+  document.querySelectorAll(".tw-dot")[2].className.indexOf("decided") !== -1 &&
+  document.querySelectorAll(".tw-dot")[1].className.indexOf("decided") === -1);
+for (const k of [1, 3, 4]) { document.querySelectorAll(".tw-dot")[k].onclick(); window.TW.decide("ar"); }
+lastPrompt = null; window.TW.submit();
+const drows = JSON.parse(lastPrompt.slice(6));
+ok("restored decisions ride the batch", drows.length === 5 && drows.some((r) => r.decisionKey === "sk"));
+ok("draft cleared once the page landed", window.localStorage.getItem("triage:draft:" + STAMP) === null);
+// No stamp: no persistence, no restored line.
+window.initTriage({ batch: 1, total: 2, emails: mkS(2), tree });
+document.querySelectorAll(".tw-dot")[0].onclick(); window.TW.decide("ar");
+window.initTriage({ batch: 1, total: 2, emails: mkS(2), tree });
+ok("no stamp: nothing restored", !document.getElementById("tw-restored"));
+try { window.localStorage.clear(); } catch (e) {}
+
 /* ===== Skip action — no-op "keep" that satisfies the page-submit gate ===== */
 console.log("\n== skip action (no-op keep) ==");
 window.initTriage({ batch: 1, total: 3, emails: mkS(3), tree });

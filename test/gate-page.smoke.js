@@ -40,6 +40,18 @@ function load(docs, opts) {
     beforeParse(w) {
       if (opts.noDb) return;
       w.claude = { use: async () => ({
+        // #541: collection("gate").where("stamp","==",s).get() over the stub docs.
+        collection: opts.noCollection ? undefined : (c) => ({
+          where: (f, op, v) => ({
+            get: async () => {
+              if (opts.failQuery) throw new Error("query refused");
+              const found = Object.keys(docs)
+                .filter((k) => k.indexOf(c + "/") === 0 && k.split("/").length === 2 && docs[k][f] === v)
+                .map((k) => ({ id: k.split("/")[1], exists: true, data: () => docs[k] }));
+              return { docs: found, size: found.length, empty: !found.length };
+            },
+          }),
+        }),
         doc: (p) => ({
           get: async () => ({ exists: p in docs, data: () => docs[p] }),
           set: async (data) => {
@@ -142,6 +154,51 @@ function act(w, a) {
     ok("two submit docs", writes.length === 2 && writes[0].path !== writes[1].path);
     ok("the later one carries the change", JSON.parse(writes[1].data.signal.slice(5)).tier2BlockConfirm === false
       && writes[1].data.ts > writes[0].data.ts);
+  }
+
+  console.log("== #541: a gate already answered says so ==");
+  {
+    const cfg = clone(C.configDoc);
+    const stamp = cfg.stamp;
+    const t3 = cfg.payload.tier3;
+    const sig = (n) => "gate:" + JSON.stringify({ stamp, tier2BlockConfirm: true,
+      tier3: t3.map((op, i) => ({ gateKey: op.gateKey, approved: i < n, channel: null,
+        reason: i < n ? null : "changed-mind" })) });
+    const docs = {
+      "gate/config": cfg,
+      "gate/submit-100": { v: 1, stamp, ts: 100, signal: sig(0) },
+      "gate/submit-200": { v: 1, stamp, ts: 200, signal: sig(t3.length - 1) },
+      "gate/submit-300": { v: 1, stamp: "2026-01-01_00-00-00+01-00", ts: 300, signal: sig(t3.length) },
+    };
+    const { w, errors } = await load(docs);
+    const st = w.document.getElementById("gs-status").textContent;
+    ok("state already_submitted, newest submit of this stamp",
+      w.TG_PAGE.state === "already_submitted" && w.TG_PAGE.doc === "gate/submit-200", JSON.stringify(w.TG_PAGE));
+    ok("status says Submitted with N/M approved",
+      st.includes("Submitted") && st.includes("Tier-3 " + (t3.length - 1) + "/" + t3.length + " approved"), st);
+    ok("declines named by reason", st.includes("not approved: changed-mind 1"), st);
+    ok("form is not shown", !w.GATE && !!w.document.getElementById("gs-again"));
+    w.document.getElementById("gs-again").onclick();
+    ok("review-again opens the form", !!w.GATE && w.TG_PAGE.state === "ok" && w.TG_PAGE.resubmit === true);
+    ok("no script errors (#541)", errors.length === 0, errors.join(" | "));
+  }
+  {
+    const cfg = clone(C.configDoc);
+    const t3 = cfg.payload.tier3;
+    const older = "gate:" + JSON.stringify({ stamp: cfg.stamp, tier2BlockConfirm: true,
+      tier3: t3.slice(1).map((op) => ({ gateKey: op.gateKey, approved: true, channel: null, reason: null })) });
+    const { w } = await load({ "gate/config": cfg, "gate/submit-50": { v: 1, stamp: cfg.stamp, ts: 50, signal: older } });
+    ok("#541 earlier submit missing an op -> form, flagged partial",
+      w.TG_PAGE.state === "ok" && w.TG_PAGE.partialPrior === "gate/submit-50" && !!w.GATE &&
+      w.document.getElementById("gs-status").textContent.includes("does not cover 1"));
+  }
+  {
+    const { w } = await load({ "gate/config": clone(C.configDoc) }, { failQuery: true });
+    ok("#541 query failure falls back to the form", w.TG_PAGE.state === "ok" && !!w.GATE);
+  }
+  {
+    const { w } = await load({ "gate/config": clone(C.configDoc) }, { noCollection: true });
+    ok("#541 no collection() falls back to the form", w.TG_PAGE.state === "ok" && !!w.GATE);
   }
 
   console.log("\n== RESULT ==  pass=" + pass + "  fail=" + fail);
